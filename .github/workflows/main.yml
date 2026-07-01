@@ -1,0 +1,112 @@
+name: Security Testing Workflow
+
+
+
+on:
+
+  push:
+  
+    branches: [ "main" ]
+    
+  pull_request:
+  
+    branches: [ "main" ]
+    
+  workflow_dispatch:
+  
+    inputs:
+    
+      test_input:
+      
+        description: 'Test input for command injection'
+        
+        required: false
+        
+        default: 'safe_value'
+        
+
+
+jobs:
+
+  security_scan:
+  
+    runs-on: ubuntu-latest
+    
+    steps:
+    
+      - name: Checkout code
+      
+        uses: actions/checkout@v4
+        
+
+
+      - name: Test Command Injection Vulnerability
+      
+        run: |
+        
+          echo "Testing input: ${{ github.event.inputs.test_input }}"
+          
+          # Potential command injection point if input is not sanitized
+          
+          ls -la "${{ github.event.inputs.test_input }}" || true
+          
+
+
+      - name: Check Environment Secrets
+      
+        run: |
+        
+          echo "Checking for default secrets..."
+          
+          # Insecurely printing secrets (GitHub should mask these)
+          
+          echo "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"
+          
+          echo "Testing if custom secrets are masked..."
+          
+          echo "DUMMY_SECRET: ${{ secrets.DUMMY_SECRET }}"
+          
+
+
+      - name: Verify Workflow Permissions
+      
+        run: |
+        
+          echo "Workflow Token Permissions:"
+          
+          # Testing what the default token can access
+          
+          curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }}
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
