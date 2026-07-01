@@ -1,112 +1,34 @@
-name: Security Testing Workflow
-
-
+name: Advanced Security Impact Testing
 
 on:
-
-  push:
-  
-    branches: [ "main" ]
-    
-  pull_request:
-  
-    branches: [ "main" ]
-    
   workflow_dispatch:
-  
     inputs:
-    
-      test_input:
-      
-        description: 'Test input for command injection'
-        
+      malicious_input:
+        description: 'Input for exploitation'
         required: false
-        
-        default: 'safe_value'
-        
-
+        default: 'safe'
 
 jobs:
-
-  security_scan:
-  
+  exploit_job:
     runs-on: ubuntu-latest
-    
     steps:
-    
-      - name: Checkout code
-      
-        uses: actions/checkout@v4
-        
-
-
-      - name: Test Command Injection Vulnerability
-      
+      - name: Step 1 - Untrusted Input Execution
+        env:
+          MY_SECRET: ${{ secrets.TEST_SECRET }}
         run: |
-        
-          echo "Testing input: ${{ github.event.inputs.test_input }}"
-          
-          # Potential command injection point if input is not sanitized
-          
-          ls -la "${{ github.event.inputs.test_input }}" || true
-          
+          echo "Processing: ${{ github.event.inputs.malicious_input }}"
+          # Vulnerable eval
+          eval "echo ${{ github.event.inputs.malicious_input }}"
 
-
-      - name: Check Environment Secrets
-      
+      - name: Step 2 - Environment Poisoning Test
         run: |
-        
-          echo "Checking for default secrets..."
-          
-          # Insecurely printing secrets (GitHub should mask these)
-          
-          echo "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"
-          
-          echo "Testing if custom secrets are masked..."
-          
-          echo "DUMMY_SECRET: ${{ secrets.DUMMY_SECRET }}"
-          
+          echo "This step uses variables set in Step 1"
+          echo "Current Path: $PATH"
+          echo "Target Secret: $TARGET_SECRET"
 
-
-      - name: Verify Workflow Permissions
-      
+      - name: Step 3 - Persistence Check
         run: |
-        
-          echo "Workflow Token Permissions:"
-          
-          # Testing what the default token can access
-          
-          curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }}
-          
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+          if [ -f "/tmp/pwned" ]; then
+            echo "Persistence achieved in runner!"
+            cat /tmp/pwned
+          fi
