@@ -1,0 +1,35 @@
+name: PatchTune Qwen 0.5B pretest
+
+on:
+  push:
+    paths:
+      - 'experiments/patchtune_qwen_pretest.py'
+      - '.github/workflows/patchtune-qwen-pretest.yml'
+  workflow_dispatch:
+
+jobs:
+  pretest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.45,<5' accelerate safetensors
+      - name: Run matched-scope Qwen pretest
+        run: python experiments/patchtune_qwen_pretest.py
+      - name: Upload result JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patchtune-qwen-pretest-result
+          path: patchtune_qwen_pretest_result.json
+          if-no-files-found: ignore
