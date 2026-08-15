@@ -1,0 +1,71 @@
+name: ProofBits vs direct MPS counterbalanced
+on:
+  push:
+    paths:
+      - '.github/workflows/proofbits-metal-vs-mps-counterbalanced.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch numpy
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python benchmarks/prepare_proofbits_cpu_avx_data.py
+      - name: Compile ProofBits and MPS benchmark binaries
+        run: |
+          xcrun -sdk macosx metal -c benchmarks/proofbits_metal_head.metal -o /tmp/proofbits_head.air
+          xcrun -sdk macosx metallib /tmp/proofbits_head.air -o /tmp/proofbits_head.metallib
+          xcrun -sdk macosx metal -c benchmarks/proofbits_mps_argmax.metal -o /tmp/mps_argmax.air
+          xcrun -sdk macosx metallib /tmp/mps_argmax.air -o /tmp/mps_argmax.metallib
+          swiftc -O -framework Metal benchmarks/proofbits_metal_full_bench.swift -o /tmp/proofbits_full
+          swiftc -O -framework Metal -framework MetalPerformanceShaders benchmarks/proofbits_mps_direct.swift -o /tmp/mps_direct
+      - name: Counterbalanced measurements on the same M1 VM
+        run: |
+          set -e
+          mkdir -p experiments/artifacts/counterbalanced
+          # A B / B A / A B / B A ordering. Each program performs its own warmup and 24 timed decisions.
+          for round in 1 2 3 4; do
+            if [ $((round % 2)) -eq 1 ]; then order='mps pb'; else order='pb mps'; fi
+            for method in $order; do
+              if [ "$method" = mps ]; then
+                /tmp/mps_direct benchmarks/tmp_proofbits_cpu /tmp/mps_argmax.metallib 8 3 >/tmp/mps_${round}.txt
+                cp benchmarks/tmp_proofbits_cpu/proofbits_mps_direct.json experiments/artifacts/counterbalanced/mps_${round}.json
+              else
+                /tmp/proofbits_full benchmarks/tmp_proofbits_cpu /tmp/proofbits_head.metallib 8 3 >/tmp/pb_${round}.txt
+                cp benchmarks/tmp_proofbits_cpu/proofbits_metal_full.json experiments/artifacts/counterbalanced/pb_${round}.json
+              fi
+            done
+          done
+          python - <<'PY'
+          import json, statistics, pathlib
+          root=pathlib.Path('experiments/artifacts/counterbalanced')
+          rows=[]
+          for r in range(1,5):
+              m=json.load(open(root/f'mps_{r}.json')); p=json.load(open(root/f'pb_{r}.json'))
+              mg=m['gpu']['median_ms']; pg=p['proofbits_decision_gpu']['median_ms']
+              mw=m['wall']['median_ms']; pw=p['proofbits_decision_wall']['median_ms']
+              rows.append({'round':r,'mps_gpu_ms':mg,'proofbits_gpu_ms':pg,'gpu_speedup':mg/pg,'mps_wall_ms':mw,'proofbits_wall_ms':pw,'wall_speedup':mw/pw,'pb_all_exact':p['all_exact']})
+          out={'kind':'proofbits_vs_direct_mps_same_vm_counterbalanced','rounds':rows,
+               'median_gpu_speedup':statistics.median(x['gpu_speedup'] for x in rows),
+               'mean_gpu_speedup':statistics.mean(x['gpu_speedup'] for x in rows),
+               'median_wall_speedup':statistics.median(x['wall_speedup'] for x in rows),
+               'all_proofbits_exact':all(x['pb_all_exact'] for x in rows),
+               'note':'Each round runs both methods on the same macos-15 M1 VM, alternating order. MPS baseline is direct MPSMatrixVectorMultiplication FP16 plus GPU argmax; ProofBits is full pilot-1 custom Metal decision path.'}
+          json.dump(out,open(root/'summary.json','w'),indent=2); print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-vs-mps-counterbalanced
+          path: experiments/artifacts/counterbalanced/
+          if-no-files-found: error
