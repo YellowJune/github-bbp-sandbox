@@ -39,6 +39,7 @@ def main():
  target=H.norm(dim=1,keepdim=True);Hg=Hg/Hg.norm(dim=1,keepdim=True).clamp_min(1e-9)*target
  Hiso=torch.randn((N,D),generator=g);Hiso=Hiso/Hiso.norm(dim=1,keepdim=True)*target
  tests={'natural':H,'coordinate_permuted':Hperm,'random_sign':Hsign,'diag_gaussian_matched':Hg,'isotropic_norm_matched':Hiso};res={}
- for name,X in tests:log(name);res[name]=evalH(X,W)
+ for name,X in tests.items():
+  log(name);res[name]=evalH(X,W)
  report={'kind':'proofbits_query_geometry_controls','model':MODEL,'vocab':W.shape[0],'hidden_dim':D,'n':N,'pilot_k':1,'results':res,'caveat':'Controls are synthetic queries evaluated against the real trained output head. They diagnose geometry; they are not model-generated states or a performance benchmark.'};OUT.write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2))
 if __name__=='__main__':main()
