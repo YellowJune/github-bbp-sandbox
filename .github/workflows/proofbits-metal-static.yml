@@ -1,0 +1,23 @@
+name: ProofBits Metal static compile
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_metal_head.metal'
+      - 'benchmarks/proofbits_metal_bench.swift'
+      - '.github/workflows/proofbits-metal-static.yml'
+  workflow_dispatch:
+jobs:
+  compile:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Metal
+        run: |
+          xcrun -sdk macosx metal -c benchmarks/proofbits_metal_head.metal -o /tmp/proofbits_head.air
+          xcrun -sdk macosx metallib /tmp/proofbits_head.air -o /tmp/proofbits_head.metallib
+      - name: Compile Swift host
+        run: swiftc -O -framework Metal benchmarks/proofbits_metal_bench.swift -o /tmp/proofbits_metal_bench
+      - run: |
+          ls -lh /tmp/proofbits_head.metallib /tmp/proofbits_metal_bench
+          file /tmp/proofbits_metal_bench
