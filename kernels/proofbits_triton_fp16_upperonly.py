@@ -3,49 +3,34 @@
 Lossless storage:
     FP16 W[V,D] -> high_byte uint8[V,D] + low_byte uint8[V,D]
 
-The high byte fixes an exact finite FP16 interval.  The upper endpoint needed
+The high byte fixes an exact finite FP16 interval. The upper endpoint needed
 for the score certificate can be reconstructed *without a LUT*.
 
 For one coordinate, let s_w be the FP16 weight sign bit already present in the
-high byte and s_h be the sign of h_j.  The extremal unread suffix is
+high byte and s_h be the sign of h_j. The extremal unread suffix is
 
     suffix = 0xFF  iff  s_w == s_h,
              0x00  otherwise.
-
-Why: for a positive stored weight, increasing the unread mantissa increases the
-value; for a negative stored weight it makes the value more negative.  The
-score contribution h_j*w is maximized by the largest value when h_j>=0 and the
-smallest value when h_j<0.  These cases reduce exactly to sign equality.
 
 Thus the high-byte pass forms the exact interval endpoint bits directly,
 bitcasts them to FP16, and performs one dot-product-like accumulation:
 
     U_i = sum_j max(h_j*w^-_ij, h_j*w^+_ij).
 
+The default fast path is pilot-1:
+    p = argmax_i U_i
+    B = exact_score(p)
+    S = {i : U_i >= B}
+then low bytes are fetched only for S and exact-refined. Correctness does not
+require p to be the true winner: z_p <= z_* <= U_* implies the true winner
+always belongs to S whenever U is a valid upper bound.
+
 For implementation-level certification, the same pass also reduces
+    M_i = max_j max(|w^-_ij|, |w^+_ij|)
+and a caller-supplied coefficient can inflate U for finite-precision rounding.
+No per-weight metadata or endpoint LUT is used.
 
-    M_i = max_j max(|w^-_ij|, |w^+_ij|).
-
-No per-weight conversion is needed for M_i: among finite FP16 values whose low
-byte is unread, maximum absolute value is obtained with suffix 0xFF, and
-positive FP16 magnitude ordering follows the signless high-byte code.  The
-kernel therefore max-reduces (high_byte & 0x7F), appends 0xFF once per row, and
-bitcasts that scalar to obtain M_i.
-
-A caller-supplied finite-precision coefficient c_round forms
-
-    U_safe_i = Uhat_i + c_round * ||h||_1^upper * M_i.
-
-The coefficient must be derived for the actual upper-bound reduction and the
-matched dense reference's accumulation semantics.  The repository's
-conservative CPU stress test used c_round = 2*gamma_{4d}; this file does not
-pretend that constant is a tight theorem for an uninspected GPU reduction tree.
-
-ProofBits exact-evaluates a few rows with largest U_safe, obtains lower bound B,
-retains U_safe_i >= B, and fetches low bytes only for pilots/survivors.
-Traffic accounting uses S union P.
-
-Top-k/compaction/final reduction are still host-side in this correctness-first
+Compaction/final reduction remain PyTorch-side in this correctness-first
 prototype and must be fused before publication-grade wall-clock claims.
 """
 
@@ -128,7 +113,7 @@ def _upper_safe_kernel(high_ptr, h_ptr,
     endpoint = tl.cast(endpoint_raw, tl.float16, bitcast=True).to(tl.float32)
     upper_raw = tl.sum(h * endpoint, axis=0)
 
-    # max absolute possible endpoint in the row: strip sign, append suffix FF once.
+    # Maximum absolute endpoint in the row: strip sign, append suffix FF once.
     mag_hi = (hb & 0x7F).to(tl.int32)
     row_mag_hi = tl.max(tl.where(mask, mag_hi, 0), axis=0)
     row_absmax_raw = (row_mag_hi.to(tl.uint16) << 8) | 255
@@ -212,12 +197,16 @@ def dense_exact(high, low, h):
     return out
 
 
-def proofbits_argmax(high, low, h, pilot_k=4, fallback_fraction=1.0,
+def proofbits_argmax(high, low, h, pilot_k=1, fallback_fraction=1.0,
                      rounding_coeff=0.0, h_l1_upper=None):
+    """Correctness-first host orchestration; pilot=1 is the final default fast path."""
     _, _, U = upper_scores_safe(
         high, h, rounding_coeff=rounding_coeff, h_l1_upper=h_l1_upper
     )
-    pilots = torch.topk(U, k=pilot_k).indices
+    if pilot_k == 1:
+        pilots = U.argmax().reshape(1)
+    else:
+        pilots = torch.topk(U, k=pilot_k).indices
     pilot_exact = refine_exact(high, low, h, pilots)
     B = pilot_exact.max()
     survivors = torch.nonzero(U >= B, as_tuple=False).squeeze(1)
@@ -225,6 +214,8 @@ def proofbits_argmax(high, low, h, pilot_k=4, fallback_fraction=1.0,
         survivors = torch.arange(high.shape[0], device=h.device, dtype=torch.int64)
     exact = refine_exact(high, low, h, survivors)
     winner = survivors[exact.argmax()]
+    # With a valid upper certificate every pilot belongs to survivors because U_p >= z_p=B
+    # for pilot=1; keep the union accounting for generalized pilot_k and raw experimental paths.
     low_rows = torch.unique(torch.cat([survivors, pilots])).numel()
     return winner, survivors.numel(), low_rows
 
@@ -246,7 +237,6 @@ def _cpu_selftest():
     assert bool(((wf >= lo) & (wf <= hi)).all())
 
     h = torch.randn(896)
-    # Direct no-LUT endpoint reconstruction used by the Triton kernel.
     hb16 = high.to(torch.int16)
     wsign = (hb16 >> 7) & 1
     hsign = (h < 0).to(torch.int16)[None, :]
@@ -262,7 +252,6 @@ def _cpu_selftest():
     midpoint_upper = (midpoint * h + radius * h.abs()).sum(dim=1)
     assert torch.allclose(direct_upper, midpoint_upper, rtol=2e-6, atol=2e-6)
 
-    # Direct row magnitude code reduction must equal exact endpoint max magnitude.
     mag_hi = high.to(torch.int16) & 0x7F
     row_mag_hi = mag_hi.amax(dim=1)
     rowmax_raw = ((row_mag_hi << 8) | 0xFF).to(torch.int16).contiguous()
