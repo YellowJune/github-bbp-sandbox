@@ -1,16 +1,12 @@
 #include <immintrin.h>
 #include <omp.h>
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -156,14 +152,29 @@ struct ProofResult {
     int low_rows;
 };
 
+static void select_top_pilots(const std::vector<float>& upper, int k, std::vector<int>& pilots) {
+    pilots.clear();
+    pilots.reserve(k);
+    for (int i = 0; i < static_cast<int>(upper.size()); ++i) {
+        if (static_cast<int>(pilots.size()) < k) {
+            pilots.push_back(i);
+            for (int p = static_cast<int>(pilots.size()) - 1; p > 0 && upper[pilots[p]] > upper[pilots[p-1]]; --p)
+                std::swap(pilots[p], pilots[p-1]);
+        } else if (upper[i] > upper[pilots.back()]) {
+            pilots.back() = i;
+            for (int p = k - 1; p > 0 && upper[pilots[p]] > upper[pilots[p-1]]; --p)
+                std::swap(pilots[p], pilots[p-1]);
+        }
+    }
+}
+
 static ProofResult proofbits_argmax(
     const std::vector<uint8_t>& high, const std::vector<uint8_t>& low,
     const float* h, int V, int D, int pilot_k,
     const float* lo_lut, const float* hi_lut,
     std::vector<float>& upper, std::vector<int>& survivors,
     std::vector<int>& pilots) {
-    // Conservative h-L1 upper bound. Double summation makes its error negligible;
-    // gamma_D is still applied to avoid relying on that empirical fact.
+    // Conservative h-L1 upper bound. Inputs are exact FP32 values promoted to FP64.
     double h1 = 0.0;
     for (int j = 0; j < D; ++j) h1 += std::abs(static_cast<double>(h[j]));
     h1 /= (1.0 - gamma_n(D, std::ldexp(1.0, -53)));
@@ -173,16 +184,16 @@ static ProofResult proofbits_argmax(
     for (int i = 0; i < V; ++i) {
         auto r = upper_dot_row(high.data() + static_cast<size_t>(i) * D,
                                h, D, lo_lut, hi_lut);
-        const double safe = static_cast<double>(r.upper) + coeff * h1 * static_cast<double>(r.rowmax);
-        upper[i] = static_cast<float>(safe);
+        const double safe64 = static_cast<double>(r.upper) + coeff * h1 * static_cast<double>(r.rowmax);
+        float safe32 = static_cast<float>(safe64);
+        // Explicit outward rounding: if round-to-nearest landed below safe64,
+        // move one representable FP32 value upward.
+        if (static_cast<double>(safe32) < safe64)
+            safe32 = std::nextafter(safe32, std::numeric_limits<float>::infinity());
+        upper[i] = safe32;
     }
 
-    pilots.resize(pilot_k);
-    std::vector<int> ids(V);
-    std::iota(ids.begin(), ids.end(), 0);
-    std::partial_sort(ids.begin(), ids.begin() + pilot_k, ids.end(),
-                      [&](int a, int b) { return upper[a] > upper[b]; });
-    for (int k = 0; k < pilot_k; ++k) pilots[k] = ids[k];
+    select_top_pilots(upper, pilot_k, pilots);
 
     float B = -std::numeric_limits<float>::infinity();
     for (int p : pilots) {
@@ -297,7 +308,6 @@ int main(int argc, char** argv) {
         }
         if (!exact_ok) throw std::runtime_error("ProofBits argmax mismatch in correctness pass");
 
-        // Warm-up both paths over all states.
         for (int n = 0; n < c.N; ++n) {
             const float* h = hidden.data() + static_cast<size_t>(n) * c.D;
             dense_argmax(high, low, h, c.V, c.D, dense_scores);
@@ -335,7 +345,7 @@ int main(int argc, char** argv) {
     out << "  \"vocab\": " << c.V << ", \"hidden_dim\": " << c.D << ", \"states\": " << c.N << ",\n";
     out << "  \"pilot_k\": " << c.pilot_k << ",\n";
     out << "  \"reference\": \"same FP16 high/low byte planes; AVX2/F16C exact row reconstruction; float/FMA accumulation\",\n";
-    out << "  \"safe_certificate\": \"upper-only plus conservative 2*gamma_4d*||h||_1*M_i\",\n";
+    out << "  \"safe_certificate\": \"upper-only plus conservative 2*gamma_4d*||h||_1*M_i with outward FP32 rounding\",\n";
     out << "  \"results\": [\n";
     for (size_t i = 0; i < rows.size(); ++i) {
         const auto& r = rows[i];
