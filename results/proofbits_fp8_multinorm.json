@@ -1,0 +1,123 @@
+{
+  "kind": "e5m2_signsplit_multi_holder",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "domains": {
+    "ag": [
+      {
+        "group_size": 896,
+        "groups": 1,
+        "exact": true,
+        "candidate_mean": 35289.640625,
+        "p90": 67950.40000000001,
+        "p99": 99296.61999999994,
+        "max": 113299,
+        "candidate_fraction": 0.23226648473699452,
+        "fp32_metadata_bytes_per_weight": 0.026785714285714284,
+        "reduction_fp32meta": 1.5884964908940424,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.013392857142857142,
+        "hypothetical_reduction_fp16meta": 1.6055754031288811
+      },
+      {
+        "group_size": 448,
+        "groups": 2,
+        "exact": true,
+        "candidate_mean": 30048.921875,
+        "p90": 55967.200000000004,
+        "p99": 95222.39999999995,
+        "max": 107079,
+        "candidate_fraction": 0.19777354856650167,
+        "fp32_metadata_bytes_per_weight": 0.05357142857142857,
+        "reduction_fp32meta": 1.5982802796510915,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.026785714285714284,
+        "hypothetical_reduction_fp16meta": 1.6332406774186208
+      },
+      {
+        "group_size": 224,
+        "groups": 4,
+        "exact": true,
+        "candidate_mean": 16493.921875,
+        "p90": 38770.20000000003,
+        "p99": 68673.93999999999,
+        "max": 72052,
+        "candidate_fraction": 0.1085583526945556,
+        "fp32_metadata_bytes_per_weight": 0.10714285714285714,
+        "reduction_fp32meta": 1.6451410789230676,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.05357142857142857,
+        "hypothetical_reduction_fp16meta": 1.7209781835392506
+      },
+      {
+        "group_size": 128,
+        "groups": 7,
+        "exact": true,
+        "candidate_mean": 9583.203125,
+        "p90": 21135.200000000008,
+        "p99": 41586.09999999999,
+        "max": 44251,
+        "candidate_fraction": 0.06307394643139216,
+        "fp32_metadata_bytes_per_weight": 0.1875,
+        "reduction_fp32meta": 1.5992656857334604,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.09375,
+        "hypothetical_reduction_fp16meta": 1.7288715419227487
+      }
+    ],
+    "gen": [
+      {
+        "group_size": 896,
+        "groups": 1,
+        "exact": true,
+        "candidate_mean": 431.640625,
+        "p90": 944.9000000000005,
+        "p99": 5462.09999999998,
+        "max": 10395,
+        "candidate_fraction": 0.002840937138005476,
+        "fp32_metadata_bytes_per_weight": 0.026785714285714284,
+        "reduction_fp32meta": 1.9424516617110617,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.013392857142857142,
+        "hypothetical_reduction_fp16meta": 1.968051063894504
+      },
+      {
+        "group_size": 448,
+        "groups": 2,
+        "exact": true,
+        "candidate_mean": 378.03125,
+        "p90": 880.9000000000005,
+        "p99": 4342.839999999984,
+        "max": 8395,
+        "candidate_fraction": 0.002488095316449031,
+        "fp32_metadata_bytes_per_weight": 0.05357142857142857,
+        "reduction_fp32meta": 1.8938326436724044,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.026785714285714284,
+        "hypothetical_reduction_fp16meta": 1.9431175468975002
+      },
+      {
+        "group_size": 224,
+        "groups": 4,
+        "exact": true,
+        "candidate_mean": 276.921875,
+        "p90": 608.6000000000001,
+        "p99": 2990.3599999999897,
+        "max": 5528,
+        "candidate_fraction": 0.001822621860520219,
+        "fp32_metadata_bytes_per_weight": 0.10714285714285714,
+        "reduction_fp32meta": 1.8034826492501748,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.05357142857142857,
+        "hypothetical_reduction_fp16meta": 1.8950267904025473
+      },
+      {
+        "group_size": 128,
+        "groups": 7,
+        "exact": true,
+        "candidate_mean": 182.375,
+        "p90": 442.50000000000006,
+        "p99": 1732.9599999999962,
+        "max": 2683,
+        "candidate_fraction": 0.0012003409330244314,
+        "fp32_metadata_bytes_per_weight": 0.1875,
+        "reduction_fp32meta": 1.6825098228121793,
+        "hypothetical_fp16_metadata_bytes_per_weight": 0.09375,
+        "hypothetical_reduction_fp16meta": 1.826566854434484
+      }
+    ]
+  },
+  "caveat": "Exact FP32 norm metadata in CPU kill-test; compressed/outward metadata and FP8 GEMM rounding not yet certified."
+}
