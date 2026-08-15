@@ -1,0 +1,71 @@
+name: Matched AVX2 ProofBits hardware benchmark
+on:
+  push:
+    paths:
+      - 'benchmarks/prepare_proofbits_cpu_benchmark.py'
+      - 'benchmarks/proofbits_cpu_avx2.cpp'
+      - '.github/workflows/proofbits-cpu-avx2-benchmark.yml'
+  workflow_dispatch:
+    inputs:
+      states:
+        description: Number of real autoregressive hidden states
+        required: true
+        default: '16'
+      reps:
+        description: Timing repetitions over all states
+        required: true
+        default: '5'
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Hardware info
+        run: |
+          lscpu
+          g++ --version
+      - name: Install model dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate
+      - name: Prepare exact FP16 byte planes and real autoregressive states
+        env:
+          NSTATES: ${{ inputs.states || '16' }}
+        run: |
+          python benchmarks/prepare_proofbits_cpu_benchmark.py --states "$NSTATES"
+          python - <<'PY'
+          import json, os
+          m=json.load(open('benchmarks/cpu_data/meta.json'))
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write(f"PB_V={m['vocab']}\nPB_D={m['hidden_dim']}\nPB_N={m['states']}\n")
+          PY
+      - name: Compile AVX2 F16C matched kernels
+        run: |
+          mkdir -p experiments/artifacts
+          g++ -O3 -std=c++17 -march=native -mavx2 -mf16c -mfma -fopenmp \
+            benchmarks/proofbits_cpu_avx2.cpp -o benchmarks/proofbits_cpu_avx2
+      - name: Run real hardware benchmark
+        env:
+          REPS: ${{ inputs.reps || '5' }}
+          OMP_PROC_BIND: close
+          OMP_PLACES: cores
+        run: |
+          benchmarks/proofbits_cpu_avx2 \
+            --dir benchmarks/cpu_data \
+            --vocab "$PB_V" --dim "$PB_D" --states "$PB_N" \
+            --reps "$REPS" --pilot-k 4
+          cat experiments/artifacts/proofbits_cpu_avx2_benchmark.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofbits-cpu-avx2-benchmark
+          path: experiments/artifacts/proofbits_cpu_avx2_benchmark.json
+          if-no-files-found: error
