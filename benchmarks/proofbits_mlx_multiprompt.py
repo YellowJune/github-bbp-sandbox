@@ -27,7 +27,6 @@ def main():
     kernels = bench.make_kernels()
     w16, high, low = bench.prepare_weights(model)
 
-    # Compile kernels/body before measurements.
     old_prompt = bench.PROMPT
     bench.PROMPT = PROMPTS[0]
     bench.warmup(model, tok, kernels, w16, high, low)
@@ -39,7 +38,8 @@ def main():
         res = {}
         for mode in order:
             gc.collect(); mx.clear_cache()
-            res[mode] = bench.decode_once(model, tok, mode, kernels, w16, high, low, TOKENS, mode == "proofbits_fp16")
+            # Timed paths are strictly symmetric: no survivor diagnostics here.
+            res[mode] = bench.decode_once(model, tok, mode, kernels, w16, high, low, TOKENS, False)
         d, p = res["dense_custom_fp16"], res["proofbits_fp16"]
         rows.append({
             "prompt_index": i,
@@ -51,14 +51,12 @@ def main():
             "speedup": d["median_ms_per_token"] / p["median_ms_per_token"],
             "dense_tps": d["tokens_per_s_from_median"],
             "proofbits_tps": p["tokens_per_s_from_median"],
-            "survivor_mean": p.get("survivor_mean"),
-            "survivor_fraction_mean": p.get("survivor_fraction_mean"),
         })
 
     bench.PROMPT = old_prompt
     speeds = [r["speedup"] for r in rows]
     out = {
-        "kind": "proofbits_mlx_integrated_multiprompt",
+        "kind": "proofbits_mlx_integrated_multiprompt_no_diagnostics",
         "model": MODEL,
         "n_prompts": len(PROMPTS),
         "tokens_per_prompt": TOKENS,
@@ -69,7 +67,7 @@ def main():
         "min_speedup": float(min(speeds)),
         "max_speedup": float(max(speeds)),
         "rows": rows,
-        "note": "Each prompt uses an independent KV cache. Dense and ProofBits use the same FP16 head representation and same MLX body; order alternates across prompts."
+        "note": "Each prompt uses an independent KV cache. Dense and ProofBits use the same FP16 head representation and same MLX body; order alternates. Neither timed path evaluates survivor diagnostics."
     }
     Path("experiments/artifacts").mkdir(parents=True, exist_ok=True)
     Path("experiments/artifacts/proofbits_mlx_multiprompt.json").write_text(json.dumps(out, indent=2))
