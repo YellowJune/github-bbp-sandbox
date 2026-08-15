@@ -1,0 +1,35 @@
+name: Quantized ExactSearch screening kill-test
+
+on:
+  push:
+    paths:
+      - 'experiments/exactsearch_quantized_screen_killtest.py'
+      - '.github/workflows/exactsearch-quantized-screen.yml'
+  workflow_dispatch:
+
+jobs:
+  qscreen:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.45,<5' accelerate datasets
+      - name: Run quantized exact screening
+        run: python experiments/exactsearch_quantized_screen_killtest.py
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exactsearch-quantized-screen-result
+          path: experiments/artifacts/exactsearch_quantized_screen_result.json
+          if-no-files-found: ignore
