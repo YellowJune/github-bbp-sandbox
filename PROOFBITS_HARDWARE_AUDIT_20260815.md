@@ -207,7 +207,54 @@ A separate diagnostic ProofBits trajectory found:
 - mean survivors: **6.21 / 262,144 = 0.00237%**
 - median survivors: **1.5 rows**
 
-This is the strongest integrated matched-reference case so far and is consistent with the intended deployment target: compact models with very large vocabularies / output spaces where the decision head is a large fraction of decode cost.
+This is consistent with the intended deployment target: compact models with very large vocabularies / output spaces where the decision head is a large fraction of decode cost.
+
+### Gemma cross-prompt and independent-runner replication
+
+Five prompt families were evaluated at 32 generated tokens/prompt with independent KV caches and alternating dense/PB execution order. Neither timed path computes survivor diagnostics.
+
+The initial run and three additional independent GitHub-hosted M1 runners produced the following per-run median integrated speedups:
+
+| Independent runner | Exact tokens | Median speedup | Per-prompt range |
+|---:|---:|---:|---:|
+| initial | 160/160 | **1.294x** | 1.159x–1.390x |
+| replicate 1 | 160/160 | **1.205x** | 1.117x–1.487x |
+| replicate 2 | 160/160 | **1.236x** | 1.152x–1.260x |
+| replicate 3 | 160/160 | **1.270x** | 1.210x–1.309x |
+
+Across these four independent runners:
+
+- **640/640 matched generated tokens exact**;
+- every tested prompt/run pair had speedup > 1;
+- median of runner medians: **1.253x**;
+- mean of runner medians: **1.251x**.
+
+This is stronger than the single-trajectory result: the practical Gemma improvement survives prompt changes and independently provisioned M1 runners.
+
+---
+
+## Gemma context-length sweep with head/body decomposition
+
+A stabilized sweep used context lengths 16, 64, 256, 512, and 1024 tokens. Each point used four AB/BA rounds and 32 generated tokens/round. Head decision and transformer-body/KV-cache phases were synchronized and timed separately.
+
+| Context | Total speedup | Head speedup | Dense head fraction | Exact |
+|---:|---:|---:|---:|:---:|
+| 16 | **1.306x** | **1.757x** | 50.35% | yes |
+| 64 | **1.390x** | **1.872x** | 51.03% | yes |
+| 256 | **1.275x** | **1.707x** | 49.88% | yes |
+| 512 | **1.305x** | **1.753x** | 50.30% | yes |
+| 1024 | **1.257x** | **1.725x** | 50.48% | yes |
+
+Additional observations:
+
+- all 5 contexts × 4 rounds × 32 tokens = **640/640 matched generated tokens exact**;
+- median dense decision-head time stayed around 6.95–7.51 ms, while ProofBits stayed around 3.95–4.39 ms;
+- median transformer body time remained roughly 6.7–7.5 ms/token through 1024-token context on this compact Gemma model;
+- therefore the dense head remains about half of token latency through 1k context and the integrated gain remains substantial rather than immediately disappearing under Amdahl's law.
+
+For example, at 1024 tokens the measured dense head fraction is ~0.505 and measured head speedup is ~1.725. A simple Amdahl estimate predicts about 1.269x whole-token speedup, close to the observed **1.257x**. This supports the causal interpretation that the integrated speedup is primarily head acceleration rather than unrelated body-runtime variation.
+
+The earlier 2-round/16-token context sweep was noisy and is superseded by this stabilized experiment.
 
 ---
 
@@ -245,7 +292,7 @@ Summary:
 - **median speedup vs native MLX FP16: 1.158x**
 - all 4x48-token tested trajectories matched between native MLX FP16 and ProofBits.
 
-This is currently the strongest practical serving result. The sequence equality is empirical for the tested trajectories; mathematical exactness is still defined relative to the specified matched FP16 accumulation/tie semantics, not arbitrary vendor reduction orders.
+This is currently the strongest practical optimized-runtime serving reference. The sequence equality is empirical for the tested trajectories; mathematical exactness is still defined relative to the specified matched FP16 accumulation/tie semantics, not arbitrary vendor reduction orders.
 
 ---
 
@@ -275,10 +322,12 @@ If suffix traffic remains negligible, the logical FP16/full-prefix ceiling becom
 
 1. **Exact matched-reference decision:** ProofBits can avoid almost all FP16 suffix reads while exactly reproducing the specified stored-FP16 reference argmax/top-k decision.
 2. **Actual accelerator speedup:** on Apple M1, full decision-head speedups of ~1.58x (Qwen) and ~1.63x (Gemma) were measured against direct Apple MPS FP16 matrix-vector + GPU argmax in same-VM counterbalanced tests.
-3. **Integrated autoregressive speedup:** in MLX-LM, matched-reference greedy decoding showed ~1.204x on one Qwen trajectory and ~1.315x on one Gemma trajectory, with all matched tokens exact.
-4. **Cross-prompt Qwen exactness:** 160/160 tokens across five prompt families were exact; median integrated speedup was ~1.064x, but one prompt was slower (~0.958x).
-5. **Native serving reference:** Gemma ProofBits was ~1.158x faster than native MLX FP16 in a fair no-diagnostic counterbalanced test and generated the same tested trajectories.
-6. **Large-vocabulary behavior:** Gemma's 262k-vocabulary integrated diagnostic retained only ~6.21 rows on average for suffix refinement.
+3. **Integrated autoregressive speedup:** matched-reference MLX-LM greedy decoding is accelerated end to end, not merely projected from isolated head timing.
+4. **Gemma cross-prompt reproducibility:** four independently provisioned M1 runners yielded median-of-runner-median speedup **1.253x**, with **640/640 matched tokens exact** and every prompt/run pair faster than dense.
+5. **Context robustness through 1k tokens:** Gemma integrated speedup remained **1.257x–1.390x** across 16–1024-token contexts; head speedup remained **1.707x–1.872x**, with another **640/640 exact tokens**.
+6. **Native serving reference:** Gemma ProofBits was ~1.158x faster than native MLX FP16 in a fair no-diagnostic counterbalanced test and generated the same tested trajectories.
+7. **Large-vocabulary behavior:** Gemma's 262k-vocabulary integrated diagnostic retained only ~6.21 rows on average for suffix refinement.
+8. **Negative boundary:** Qwen cross-prompt median speedup was only ~1.064x and one prompt was slower (~0.958x); CPU execution was also slower. The method should not be framed as universally faster.
 
 ## Not supported
 
@@ -291,8 +340,8 @@ If suffix traffic remains negligible, the logical FP16/full-prefix ceiling becom
 
 ## Highest-priority next experiments
 
-1. **Gemma cross-prompt integrated replication** — strongest deployment case must be tested across prompt families, not one trajectory.
-2. **Context-length sweep** — measure integrated speedup as KV/body cost rises, to quantify the Amdahl boundary directly.
-3. **NVIDIA CUDA/Triton benchmark + Nsight DRAM counters** — test whether conditional byte fetching transfers to datacenter GPU memory systems.
-4. **Longer trajectories / multiple seeds/prompts** — tighten confidence intervals and characterize rare slow cases.
+1. **NVIDIA CUDA/Triton benchmark + Nsight DRAM counters** — test whether conditional byte fetching transfers to datacenter GPU memory systems.
+2. **Longer Gemma trajectories and larger prompt suite** — tighten confidence intervals and characterize rare slow cases beyond the present 640-token replicated suite.
+3. **Energy / memory-traffic counters** — connect conditional byte fetching directly to measured system energy and DRAM traffic where hardware tooling allows it.
+4. **Broader large-output tasks** — e.g. large-label classification/retrieval heads, to test whether the mechanism generalizes beyond autoregressive vocabulary selection.
 5. **Optional ProofBits+ packed decoder** — only after the 8+8 implementation is fully characterized.
