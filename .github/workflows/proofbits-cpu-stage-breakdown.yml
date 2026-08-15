@@ -1,0 +1,45 @@
+name: ProofBits CPU stage breakdown
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_cpu_stage_breakdown.cpp'
+      - '.github/workflows/proofbits-cpu-stage-breakdown.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python benchmarks/prepare_proofbits_cpu_avx_data.py
+      - run: g++ -O3 -march=native -mavx2 -mf16c -mfma -fopenmp -std=c++17 benchmarks/proofbits_cpu_stage_breakdown.cpp -o benchmarks/proofbits_cpu_stage_breakdown
+      - run: |
+          mkdir -p experiments/artifacts
+          python - <<'PY'
+          import json
+          m=json.load(open('benchmarks/tmp_proofbits_cpu/meta.json'))
+          open('/tmp/dims','w').write(f"{m['V']} {m['D']} {m['N']}\n")
+          PY
+          read V D N < /tmp/dims
+          echo '[' > experiments/artifacts/proofbits_cpu_stage_breakdown.json
+          ./benchmarks/proofbits_cpu_stage_breakdown benchmarks/tmp_proofbits_cpu "$V" "$D" "$N" 1 >> experiments/artifacts/proofbits_cpu_stage_breakdown.json
+          echo ',' >> experiments/artifacts/proofbits_cpu_stage_breakdown.json
+          ./benchmarks/proofbits_cpu_stage_breakdown benchmarks/tmp_proofbits_cpu "$V" "$D" "$N" 4 >> experiments/artifacts/proofbits_cpu_stage_breakdown.json
+          echo ']' >> experiments/artifacts/proofbits_cpu_stage_breakdown.json
+          cat experiments/artifacts/proofbits_cpu_stage_breakdown.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-cpu-stage-breakdown
+          path: experiments/artifacts/proofbits_cpu_stage_breakdown.json
+          if-no-files-found: warn
