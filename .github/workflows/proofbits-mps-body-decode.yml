@@ -1,0 +1,38 @@
+name: ProofBits MPS body-only decode timing
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_mps_body_decode.py'
+      - '.github/workflows/proofbits-mps-body-decode.yml'
+  workflow_dispatch:
+jobs:
+  body:
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - Qwen/Qwen2.5-0.5B-Instruct
+          - unsloth/gemma-3-270m
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PB_MODEL: ${{ matrix.model }}
+      PB_STEPS: '32'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch numpy
+          python -m pip install 'transformers>=4.55,<5' accelerate
+      - run: python benchmarks/proofbits_mps_body_decode.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-body-${{ strategy.job-index }}
+          path: experiments/artifacts/proofbits_mps_body_*.json
+          if-no-files-found: warn
