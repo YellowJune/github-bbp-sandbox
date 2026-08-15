@@ -4,6 +4,7 @@ on:
     paths:
       - 'benchmarks/proofbits_metal_head.metal'
       - 'benchmarks/proofbits_metal_bench.swift'
+      - 'benchmarks/proofbits_metal_full_bench.swift'
       - '.github/workflows/proofbits-metal-static.yml'
   workflow_dispatch:
 jobs:
@@ -16,8 +17,10 @@ jobs:
         run: |
           xcrun -sdk macosx metal -c benchmarks/proofbits_metal_head.metal -o /tmp/proofbits_head.air
           xcrun -sdk macosx metallib /tmp/proofbits_head.air -o /tmp/proofbits_head.metallib
-      - name: Compile Swift host
-        run: swiftc -O -framework Metal benchmarks/proofbits_metal_bench.swift -o /tmp/proofbits_metal_bench
+      - name: Compile Swift hosts
+        run: |
+          swiftc -O -framework Metal benchmarks/proofbits_metal_bench.swift -o /tmp/proofbits_metal_bench
+          swiftc -O -framework Metal benchmarks/proofbits_metal_full_bench.swift -o /tmp/proofbits_metal_full
       - run: |
-          ls -lh /tmp/proofbits_head.metallib /tmp/proofbits_metal_bench
-          file /tmp/proofbits_metal_bench
+          ls -lh /tmp/proofbits_head.metallib /tmp/proofbits_metal_bench /tmp/proofbits_metal_full
+          file /tmp/proofbits_metal_bench /tmp/proofbits_metal_full
