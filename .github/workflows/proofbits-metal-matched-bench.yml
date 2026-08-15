@@ -1,0 +1,44 @@
+name: ProofBits matched Metal head benchmark
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_metal_head.metal'
+      - 'benchmarks/proofbits_metal_bench.swift'
+      - '.github/workflows/proofbits-metal-matched-bench.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install data-prep dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch numpy
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - name: Prepare actual Qwen head and real hidden states
+        run: python benchmarks/prepare_proofbits_cpu_avx_data.py
+      - name: Compile Metal kernels
+        run: |
+          xcrun -sdk macosx metal -c benchmarks/proofbits_metal_head.metal -o /tmp/proofbits_head.air
+          xcrun -sdk macosx metallib /tmp/proofbits_head.air -o /tmp/proofbits_head.metallib
+      - name: Compile Swift benchmark host
+        run: swiftc -O -framework Metal benchmarks/proofbits_metal_bench.swift -o /tmp/proofbits_metal_bench
+      - name: Run matched accelerator benchmark
+        run: |
+          /tmp/proofbits_metal_bench benchmarks/tmp_proofbits_cpu /tmp/proofbits_head.metallib 12 3 | tee /tmp/proofbits_metal_stdout.json
+          mkdir -p experiments/artifacts
+          cp benchmarks/tmp_proofbits_cpu/proofbits_metal_matched.json experiments/artifacts/proofbits_metal_matched.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-metal-matched
+          path: experiments/artifacts/proofbits_metal_matched.json
+          if-no-files-found: warn
