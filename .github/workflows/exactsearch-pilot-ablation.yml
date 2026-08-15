@@ -1,0 +1,35 @@
+name: ExactSearch pilot ablation
+
+on:
+  push:
+    paths:
+      - 'experiments/exactsearch_pilot_ablation.py'
+      - '.github/workflows/exactsearch-pilot-ablation.yml'
+  workflow_dispatch:
+
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.45,<5' accelerate datasets
+      - name: Run pilot ablation
+        run: python experiments/exactsearch_pilot_ablation.py
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exactsearch-pilot-ablation
+          path: experiments/artifacts/exactsearch_pilot_ablation.json
+          if-no-files-found: ignore
