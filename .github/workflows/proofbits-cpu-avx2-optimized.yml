@@ -1,0 +1,51 @@
+name: Hoisted-invariant AVX2 ProofBits benchmark
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_cpu_avx2_optimized.cpp'
+      - '.github/workflows/proofbits-cpu-avx2-optimized.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate
+      - name: Prepare 16 real autoregressive states
+        run: |
+          python benchmarks/prepare_proofbits_cpu_benchmark.py --states 16
+          python - <<'PY'
+          import json, os
+          m=json.load(open('benchmarks/cpu_data/meta.json'))
+          with open(os.environ['GITHUB_ENV'],'a') as f:
+              f.write(f"PB_V={m['vocab']}\nPB_D={m['hidden_dim']}\nPB_N={m['states']}\n")
+          PY
+      - name: Compile optimized matched kernels
+        run: |
+          mkdir -p experiments/artifacts
+          g++ -O3 -std=c++17 -march=native -mavx2 -mf16c -mfma -fopenmp \
+            benchmarks/proofbits_cpu_avx2_optimized.cpp -o benchmarks/proofbits_cpu_avx2_optimized
+      - name: Benchmark and phase profile
+        env:
+          OMP_PROC_BIND: close
+          OMP_PLACES: cores
+        run: |
+          benchmarks/proofbits_cpu_avx2_optimized \
+            --dir benchmarks/cpu_data --vocab "$PB_V" --dim "$PB_D" --states "$PB_N" \
+            --reps 7 --pilot-k 4
+          cat experiments/artifacts/proofbits_cpu_avx2_optimized.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofbits-cpu-avx2-optimized
+          path: experiments/artifacts/proofbits_cpu_avx2_optimized.json
+          if-no-files-found: error
