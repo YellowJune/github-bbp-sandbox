@@ -1,0 +1,31 @@
+name: ProofBits Gemma MLX multi-prompt integrated decode
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_mlx_multiprompt.py'
+      - '.github/workflows/proofbits-mlx-multiprompt-gemma.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PB_MODEL: mlx-community/gemma-3-270m-bf16
+      PB_TOKENS: '32'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade mlx mlx-lm
+      - run: python benchmarks/proofbits_mlx_multiprompt.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-mlx-multiprompt-gemma
+          path: experiments/artifacts/proofbits_mlx_multiprompt_gemma-3-270m-bf16.json
+          if-no-files-found: warn
