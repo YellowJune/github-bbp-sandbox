@@ -5,6 +5,8 @@ on:
       - 'experiments/proofbits_fp8_topk_residual_sketch.py'
       - '.github/workflows/proofbits-fp8-topk-residual-sketch.yml'
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -22,6 +24,16 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install 'transformers>=4.55,<5' accelerate datasets
       - run: python experiments/proofbits_fp8_topk_residual_sketch.py
+      - name: Persist audited JSON
+        run: |
+          mkdir -p results
+          cp experiments/artifacts/proofbits_fp8_topk_residual_sketch.json results/proofbits_fp8_topk_residual_sketch.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add results/proofbits_fp8_topk_residual_sketch.json
+          git commit -m 'Record top-K residual ProofBits result' || exit 0
+          git pull --rebase origin main
+          git push origin HEAD:main
       - uses: actions/upload-artifact@v4
         with:
           name: proofbits-fp8-topk-residual-sketch
