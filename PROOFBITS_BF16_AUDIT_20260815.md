@@ -104,18 +104,66 @@ Therefore a packed 10+6 representation can be created directly from the checkpoi
 
 ---
 
+## Real packed 10+6 Metal implementation — lane-local unpack
+
+A native-BF16 Metal implementation was built for `mlx-community/gemma-3-270m-bf16`.
+
+Storage:
+
+- original BF16 lm head: **335,544,320 bytes**;
+- packed 10-bit prefix plane: **209,715,200 bytes**;
+- packed 6-bit suffix plane: **125,829,120 bytes**;
+- one-time pack setup: ~**2.99 s**, excluded from generation timing.
+
+The matched dense reference reads the original BF16 head and accumulates row scores in FP32 with the same one-SIMDgroup-per-row reduction structure. ProofBits reconstructs exact BF16 values from packed 10+6 bits for the pilot/survivors.
+
+Four AB/BA trajectories ×48 generated tokens:
+
+- **192/192 tokens exact** under the matched BF16 reference semantics;
+- median decision-head speedup: **1.183×**;
+- median integrated autoregressive speedup: **1.102×**;
+- mean integrated speedup: **1.099×**;
+- integrated diagnostic mean survivors: **86.81 / 262,144 = 0.0331%**.
+
+Per-round integrated speedups were approximately 1.012×, 1.125×, 1.181×, and 1.079×.
+
+**Conclusion:** native checkpoint-BF16 ProofBits is not merely a logical traffic construction. The first packed implementation produces a modest but real matched-reference wall-clock gain while preserving the original BF16 values exactly.
+
+The measured head gain is much smaller than the ideal ~1.596× traffic ceiling, indicating that packed bit extraction and address/control overhead are first-order costs.
+
+---
+
+## Falsified optimization: SIMD-cooperative 10-bit unpack
+
+A second kernel attempted to force physical prefix loads closer to the ideal 10 bits/weight. For each 32-weight block, only lanes 0..9 loaded the ten packed uint32 words and distributed them to all 32 lanes with `simd_shuffle`.
+
+This **failed decisively on Apple M1** despite preserving exactness:
+
+- **192/192 tokens exact**;
+- median decision-head speedup: **0.531×** (i.e. substantially slower than dense);
+- median integrated speedup: **0.705×**;
+- per-round integrated ratios: ~0.789×, 0.685×, 0.725×, 0.677×.
+
+Survivor counts were unchanged, so the regression is an unpack/execution-path effect rather than a certificate-quality failure.
+
+**Decision: reject the SIMD-cooperative M1 implementation.** Lower payload traffic is insufficient when shuffle/unpack cost dominates. The lane-local packed implementation remains the current positive native-BF16 kernel.
+
+---
+
 ## Current claim boundary
 
 Supported:
 - BF16 8+8 is decisively unsuitable because the prefix cuts the exponent field;
 - p=10 is the best logical-traffic point in the tested p=8..14 sweep on both Qwen and Gemma;
 - exact decision recovery is retained in all prefix-sweep tests;
-- raw MLX BF16 storage can be captured exactly for packing.
+- raw MLX BF16 storage can be captured exactly for packing;
+- a real packed BF16 10+6 Metal path preserves 192/192 matched generated decisions and yields ~**1.18× head / 1.10× integrated** speedup on the tested Gemma trajectory;
+- a seemingly more bandwidth-efficient cooperative unpack can be slower, establishing that unpack architecture is part of the systems problem rather than an implementation footnote.
 
-Not yet supported in this note:
-- wall-clock speedup for the densely packed p=10 decoder;
-- native-BF16 integrated tokens/s improvement;
+Not yet supported:
+- superiority of the positive p=10 kernel over MLX's optimized native BF16 `lm_head` serving path;
+- cross-prompt / multi-runner native-BF16 p=10 robustness;
 - CUDA/Triton implementation of p=10;
 - energy/DRAM-counter gains.
 
-A real Apple-M1 Metal implementation of densely packed BF16 10+6 is being used as the next falsification gate. If bit extraction costs erase the reduced traffic, the p=10 branch must remain a theoretical storage result rather than a systems headline.
+The immediate gate is a same-run AB/BA comparison between the positive lane-local p=10 kernel and native MLX BF16 `lm_head + argmax`. Sequence equality is measured empirically rather than assumed because vendor reduction semantics can differ.
