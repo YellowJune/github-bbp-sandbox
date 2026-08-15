@@ -9,7 +9,6 @@ from mlx_lm import load
 from mlx_lm.models import cache as cache_mod
 
 import proofbits_mlx_bf16_p10_integrated as base
-from proofbits_mlx_bf16_p10_coop import make_cooperative_kernels
 
 MODEL='mlx-community/gemma-3-270m-bf16'
 PROMPT='Explain in one paragraph why exact inference decisions can sometimes be certified from partial numerical representations.'
@@ -53,8 +52,10 @@ def main():
     model,tok=load(MODEL);mx.eval(model.parameters())
     weight=model.lm_head.weight;V,D=[int(x) for x in weight.shape]
     prefix,suffix=base.pack_bf16_weight(weight);mx.eval(prefix,suffix)
-    ks=make_cooperative_kernels(D)
-    # compile both serving paths before measurement
+    # IMPORTANT: use the positive lane-local p10 implementation. The attempted
+    # SIMD-cooperative unpack was a falsification (slower than dense) and is not
+    # used for this optimized-runtime comparison.
+    ks=base.make_kernels(D)
     for m in ['native_mlx_bf16','proofbits_bf16_p10']: run(model,tok,m,ks,prefix,suffix,4)
     mx.synchronize()
     rows=[]
@@ -65,7 +66,7 @@ def main():
             gc.collect();mx.clear_cache();res[m]=run(model,tok,m,ks,prefix,suffix,TOKENS)
         n=res['native_mlx_bf16'];p=res['proofbits_bf16_p10']
         rows.append({'round':r+1,'order':order,'sequence_equal':n['tokens']==p['tokens'],'native_total_ms':n['median_total_ms'],'proofbits_total_ms':p['median_total_ms'],'total_speedup':n['median_total_ms']/p['median_total_ms'],'native_head_ms':n['median_head_ms'],'proofbits_head_ms':p['median_head_ms'],'head_speedup':n['median_head_ms']/p['median_head_ms']})
-    out={'kind':'proofbits_native_bf16_p10_vs_native_mlx_bf16','model':MODEL,'tokens_per_round':TOKENS,'rounds':rows,'all_sequences_equal':all(x['sequence_equal'] for x in rows),'median_total_speedup':med([x['total_speedup'] for x in rows]),'mean_total_speedup':float(statistics.mean(x['total_speedup'] for x in rows)),'median_head_speedup':med([x['head_speedup'] for x in rows]),'note':'Native MLX BF16 lm_head+argmax vs densely packed 10+6 ProofBits, same BF16 checkpoint head and same MLX KV-cache body. Sequence equality is empirical, not assumed, because reduction semantics differ.'}
+    out={'kind':'proofbits_lane_local_native_bf16_p10_vs_native_mlx_bf16','model':MODEL,'tokens_per_round':TOKENS,'rounds':rows,'all_sequences_equal':all(x['sequence_equal'] for x in rows),'median_total_speedup':med([x['total_speedup'] for x in rows]),'mean_total_speedup':float(statistics.mean(x['total_speedup'] for x in rows)),'median_head_speedup':med([x['head_speedup'] for x in rows]),'note':'Native MLX BF16 lm_head+argmax vs the positive lane-local densely packed 10+6 ProofBits implementation, same BF16 checkpoint head and same MLX KV-cache body. Sequence equality is empirical, not assumed, because reduction semantics differ.'}
     Path('experiments/artifacts').mkdir(parents=True,exist_ok=True);Path('experiments/artifacts/proofbits_mlx_bf16_p10_vs_native.json').write_text(json.dumps(out,indent=2));print(json.dumps(out,indent=2))
 
 if __name__=='__main__':main()
