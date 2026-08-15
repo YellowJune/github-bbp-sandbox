@@ -1,9 +1,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// One 128-thread threadgroup computes one vocabulary row.
-// D is runtime to keep the same kernel usable for Qwen/Gemma follow-ups.
-constant uint TG = 128;
+// One 32-lane SIMDgroup computes one vocabulary row. Qwen D=896 is exactly
+// 28 values/lane; Gemma D=640 is 20 values/lane. Dense and ProofBits use the
+// identical work decomposition so the stage comparison is matched.
+constant uint SG = 32;
 
 kernel void dense_fp16_row(
     device const ushort* full_bits [[buffer(0)]],
@@ -11,23 +12,17 @@ kernel void dense_fp16_row(
     device float* out [[buffer(2)]],
     constant uint& D [[buffer(3)]],
     uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]],
-    threadgroup float* scratch [[threadgroup(0)]])
+    uint lane [[thread_index_in_simdgroup]])
 {
     float acc = 0.0f;
     const ulong base = (ulong)row * (ulong)D;
-    for (uint j = tid; j < D; j += TG) {
+    for (uint j = lane; j < D; j += SG) {
         ushort raw = full_bits[base + j];
         half w = as_type<half>(raw);
         acc = fma(h[j], (float)w, acc);
     }
-    scratch[tid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = TG >> 1; stride > 0; stride >>= 1) {
-        if (tid < stride) scratch[tid] += scratch[tid + stride];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (tid == 0) out[row] = scratch[0];
+    float total = simd_sum(acc);
+    if (lane == 0) out[row] = total;
 }
 
 kernel void proofbits_high_upper_row(
@@ -36,12 +31,11 @@ kernel void proofbits_high_upper_row(
     device float* out [[buffer(2)]],
     constant uint& D [[buffer(3)]],
     uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_index_in_threadgroup]],
-    threadgroup float* scratch [[threadgroup(0)]])
+    uint lane [[thread_index_in_simdgroup]])
 {
     float acc = 0.0f;
     const ulong base = (ulong)row * (ulong)D;
-    for (uint j = tid; j < D; j += TG) {
+    for (uint j = lane; j < D; j += SG) {
         uchar hb = high[base + j];
         ushort weightSign = (ushort)(hb & (uchar)0x80);
         ushort hiddenSign = (h[j] < 0.0f) ? (ushort)0x80 : (ushort)0x00;
@@ -50,11 +44,6 @@ kernel void proofbits_high_upper_row(
         half endpoint = as_type<half>(raw);
         acc = fma(h[j], (float)endpoint, acc);
     }
-    scratch[tid] = acc;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = TG >> 1; stride > 0; stride >>= 1) {
-        if (tid < stride) scratch[tid] += scratch[tid + stride];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (tid == 0) out[row] = scratch[0];
+    float total = simd_sum(acc);
+    if (lane == 0) out[row] = total;
 }
