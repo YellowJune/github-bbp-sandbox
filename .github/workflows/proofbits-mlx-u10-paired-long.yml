@@ -1,0 +1,38 @@
+name: ProofBits u10 long paired ABBA
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_mlx_u10_paired_long.py'
+      - '.github/workflows/proofbits-mlx-u10-paired-long.yml'
+  workflow_dispatch:
+jobs:
+  paired:
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [1, 2, 3]
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade mlx mlx-lm numpy
+      - name: Run long paired benchmark
+        run: |
+          mkdir -p experiments/artifacts
+          python benchmarks/proofbits_mlx_u10_paired_long.py | tee experiments/artifacts/proofbits_mlx_u10_paired_long_replica_${{ matrix.replica }}.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-u10-paired-long-${{ matrix.replica }}
+          path: |
+            experiments/artifacts/proofbits_mlx_u10_paired_long.json
+            experiments/artifacts/proofbits_mlx_u10_paired_long_replica_${{ matrix.replica }}.log
+          if-no-files-found: warn
