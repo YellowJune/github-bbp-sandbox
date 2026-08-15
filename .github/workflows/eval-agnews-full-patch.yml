@@ -1,0 +1,37 @@
+name: Evaluate exact AG News full patch
+
+on:
+  push:
+    paths:
+      - 'experiments/eval_agnews_full_patch.py'
+      - 'experiments/agnews_full_patch.b64'
+      - '.github/workflows/eval-agnews-full-patch.yml'
+  workflow_dispatch:
+
+jobs:
+  eval-full-patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.45,<5' accelerate safetensors datasets
+      - name: Evaluate exact saved patch
+        working-directory: experiments
+        run: python eval_agnews_full_patch.py
+      - name: Upload evaluation result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-agnews-full-patch-result
+          path: experiments/eval_agnews_full_patch_result.json
+          if-no-files-found: ignore
