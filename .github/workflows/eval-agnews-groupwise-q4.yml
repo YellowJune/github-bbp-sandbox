@@ -1,0 +1,36 @@
+name: AG News group-wise INT4 diagnostic
+
+on:
+  push:
+    paths:
+      - 'experiments/eval_agnews_groupwise_q4.py'
+      - '.github/workflows/eval-agnews-groupwise-q4.yml'
+  workflow_dispatch:
+
+jobs:
+  q4-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.45,<5' accelerate safetensors datasets
+      - name: Run quantization substrate diagnostic
+        working-directory: experiments
+        run: python eval_agnews_groupwise_q4.py
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agnews-groupwise-q4-diagnostic
+          path: experiments/eval_agnews_groupwise_q4_result.json
+          if-no-files-found: ignore
