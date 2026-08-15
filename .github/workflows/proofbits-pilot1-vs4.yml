@@ -1,0 +1,30 @@
+name: ProofBits pilot-1 versus pilot-4
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_pilot1_vs4.py'
+      - '.github/workflows/proofbits-pilot1-vs4.yml'
+  workflow_dispatch:
+jobs:
+  eval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python experiments/proofbits_pilot1_vs4.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-pilot1-vs4
+          path: experiments/artifacts/proofbits_pilot1_vs4.json
+          if-no-files-found: warn
