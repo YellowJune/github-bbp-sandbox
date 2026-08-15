@@ -1,0 +1,29 @@
+name: Exact FP16 top-k ProofBits
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_fp16_topk.py'
+      - '.github/workflows/proofbits-fp16-topk.yml'
+  workflow_dispatch:
+jobs:
+  topk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python experiments/proofbits_fp16_topk.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofbits-fp16-topk
+          path: experiments/artifacts/proofbits_fp16_topk.json
+          if-no-files-found: error
