@@ -1,0 +1,43 @@
+name: ProofBits CPU AVX microbenchmark
+on:
+  push:
+    paths:
+      - 'benchmarks/prepare_proofbits_cpu_avx_data.py'
+      - 'benchmarks/proofbits_cpu_avx.cpp'
+      - '.github/workflows/proofbits-cpu-avx-microbench.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python benchmarks/prepare_proofbits_cpu_avx_data.py
+      - name: Compile AVX2/F16C benchmark
+        run: g++ -O3 -march=native -mavx2 -mf16c -mfma -fopenmp -std=c++17 benchmarks/proofbits_cpu_avx.cpp -o benchmarks/proofbits_cpu_avx
+      - name: Run benchmark
+        run: |
+          mkdir -p experiments/artifacts
+          python - <<'PY'
+          import json
+          m=json.load(open('benchmarks/tmp_proofbits_cpu/meta.json'))
+          open('/tmp/dims','w').write(f"{m['V']} {m['D']} {m['N']}")
+          PY
+          read V D N < /tmp/dims
+          ./benchmarks/proofbits_cpu_avx benchmarks/tmp_proofbits_cpu "$V" "$D" "$N" 1,2,4 | tee experiments/artifacts/proofbits_cpu_avx_microbench.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-cpu-avx-microbench
+          path: experiments/artifacts/proofbits_cpu_avx_microbench.json
+          if-no-files-found: warn
