@@ -1,18 +1,18 @@
 # ProofBits Hardware Audit — 2026-08-15
 
-This note freezes the strongest hardware results and the negative results observed so far. It intentionally separates logical traffic, matched custom kernels, strong vendor-library baselines, and whole-model projections.
+This note freezes the strongest positive and negative hardware results observed so far. It separates logical traffic, matched custom kernels, vendor-library baselines, and integrated autoregressive decode. Later sections supersede earlier projections where explicitly stated.
 
 ## Final main fast path
 
 Lossless FP16 byte planes, upper-only, pilot=1:
 
-1. read high byte for every output-head weight;
+1. read the high byte for every output-head weight;
 2. reconstruct the exact score-maximizing FP16 interval endpoint from hidden/weight sign bits;
-3. compute certified upper score `U_i`;
-4. `p = argmax(U)`;
-5. read the low byte of pilot row `p`, obtaining exact threshold `B=z_p`;
+3. compute a certified upper score `U_i` for every row;
+4. choose `p = argmax(U)`;
+5. read the low byte of pilot row `p`, obtaining exact threshold `B = z_p`;
 6. refine only rows with `U_i >= B`;
-7. return exact stored-FP16 argmax using matched tie policy.
+7. return the exact stored-FP16 argmax under the specified accumulation/tie semantics.
 
 The pilot need not be the winner. Correctness follows from `U_* >= z_* >= z_p = B`.
 
@@ -32,12 +32,12 @@ LUT-free direct endpoint reconstruction:
 
 All decisions were exact; mean survivor count was 79.75.
 
-Stage breakdown showed that the control path was not the main problem. The high-byte upper pass itself was slower than dense FP16 on this CPU:
+Stage breakdown showed that control flow was not the main problem. The high-byte upper pass itself was slower than dense FP16 on this CPU:
 
 - 1 thread: dense 15.777 ms vs high pass 22.600 ms (0.698x)
 - 4 threads: dense 9.804 ms vs high pass 13.384 ms (0.733x)
 
-**Conclusion:** half the logical weight bytes do not automatically imply a speedup. Endpoint reconstruction / FP16 conversion can dominate on CPUs without a favorable native execution path.
+**Conclusion:** reducing logical weight bytes does not guarantee speedup. Endpoint reconstruction / FP16 conversion can dominate on an unfavorable CPU execution path.
 
 ---
 
@@ -106,15 +106,15 @@ This cross-model result weakens the hypothesis that the Qwen hardware result is 
 
 ---
 
-## Strong vendor-library baseline — direct Apple MPS
+## Strong vendor-library decision-head baseline — direct Apple MPS
 
 A PyTorch MPS `torch.mv` baseline was measured but is **not** used as the primary baseline because PyTorch emitted a runtime warning that this M=1 shape hits a known MPS matrix-multiplication issue and falls back to a generic Metal implementation.
 
-The stronger baseline directly invokes Apple's `MPSMatrixVectorMultiplication` on FP16 weights, uses Apple's recommended matrix row stride, and appends a custom GPU FP16 argmax in the same command buffer.
+The stronger baseline directly invokes Apple's `MPSMatrixVectorMultiplication` on FP16 weights, uses Apple's matrix row-stride requirements, and appends a custom GPU FP16 argmax in the same command buffer.
 
 ### Qwen — same-VM counterbalanced
 
-Four rounds on the same GitHub `macos-15` M1 VM, alternating execution order MPS->PB / PB->MPS.
+Four rounds on the same GitHub `macos-15` M1 VM, alternating MPS->PB / PB->MPS.
 
 Per-round GPU speedups:
 
@@ -128,61 +128,171 @@ Summary:
 - **median GPU speedup: 1.583x**
 - mean GPU speedup: 1.596x
 - **median wall speedup: 1.572x**
-- all ProofBits rounds exact
-
-This is the strongest Qwen system result so far.
+- all ProofBits rounds exact relative to the matched reference
 
 ### Gemma — same-VM counterbalanced
 
 Four same-M1 rounds against direct `MPSMatrixVectorMultiplication + GPU argmax`:
 
-- **median GPU speedup: ~1.633x**
-- **median wall speedup: ~1.619x**
-- all ProofBits rounds exact
-
-This is the strongest cross-model confirmation so far.
+- **median GPU speedup: 1.633x**
+- **median wall speedup: 1.619x**
+- all ProofBits rounds exact relative to the matched reference
 
 ---
 
-## Whole-token impact: current projection only
+# Integrated MLX autoregressive decode
 
-Qwen PyTorch-MPS body-only KV-cache decode (lm_head intentionally omitted) had steady-state median ~50.70 ms/token on the hosted M1 setup.
+These experiments supersede the earlier component-only whole-token projection. The MLX-LM transformer body, KV cache, ProofBits head, token materialization, and token feedback all execute inside the timed autoregressive loop.
 
-Combining that body measurement with same-hardware head medians gives only a component-level projection:
+Both the matched dense baseline and ProofBits use the same lossless FP16 output-head storage. Conversion from the downloaded BF16 checkpoint to the test FP16 head representation and byte-plane construction occur outside timed generation.
 
-`(body + dense head) / (body + ProofBits head) ~= 1.041x`.
+## Qwen2.5-0.5B — integrated matched-reference decode
 
-Thus Qwen's measured ~1.58x decision-head speedup projects to only ~4% whole-token improvement in that particular PyTorch-MPS body stack.
+Model: `mlx-community/Qwen2.5-0.5B-Instruct-bf16`, V=151,936, D=896.
 
-**This is not an integrated end-to-end ProofBits benchmark.** Framework/body overhead dominates the Qwen setup. The practical main target should be head-dominant compact / huge-vocabulary models and/or an integrated runtime such as MLX where the body and custom head share the same graph/runtime.
+Four AB/BA counterbalanced trajectories, 48 generated tokens each:
+
+| Round | Dense custom FP16 | ProofBits | Speedup | Sequence exact |
+|---:|---:|---:|---:|:---:|
+| 1 | 25.191 ms | 20.972 ms | 1.201x | yes |
+| 2 | 25.243 ms | 20.920 ms | 1.207x | yes |
+| 3 | 26.797 ms | 20.760 ms | 1.291x | yes |
+| 4 | 23.651 ms | 21.149 ms | 1.118x | yes |
+
+Summary:
+
+- **192/192 generated tokens match exactly** between the matched dense FP16 reference and ProofBits.
+- **median integrated speedup: 1.204x**
+- median dense latency across rounds: ~25.217 ms/token
+- median ProofBits latency across rounds: ~20.946 ms/token
+
+A separate diagnostic trajectory measured mean survivor count ~44.15 / 151,936 (~0.0291%), but its timing is not used because the diagnostic adds an extra survivor-count reduction.
+
+### Qwen multi-prompt robustness
+
+Five prompt families (explanation, algebra, code, systems summary, creative writing), 32 tokens each, independent KV caches, alternating dense/PB order, no asymmetric diagnostics in either timed path:
+
+- **160/160 tokens exact** under the matched FP16 reference.
+- median speedup: **1.064x**
+- mean speedup: **1.054x**
+- range: **0.958x to 1.117x**
+- one prompt was slower with ProofBits (~0.958x).
+
+**Interpretation:** Qwen provides strong exactness evidence but not a universal latency win. The earlier single-prompt 1.204x integrated result is real for that trajectory, but should not be presented as a prompt-independent Qwen speedup. The defensible cross-prompt number is the more modest ~1.06x median, with an explicit negative prompt case.
+
+---
+
+## Gemma 3 270M — integrated matched-reference decode
+
+Model: `mlx-community/gemma-3-270m-bf16`, V=262,144, D=640, explicit `lm_head.weight`.
+
+Four AB/BA trajectories, 48 generated tokens each:
+
+| Round | Dense custom FP16 | ProofBits | Speedup | Sequence exact |
+|---:|---:|---:|---:|:---:|
+| 1 | 15.577 ms | 12.770 ms | 1.220x | yes |
+| 2 | 16.505 ms | 12.812 ms | 1.288x | yes |
+| 3 | 19.897 ms | 14.833 ms | 1.341x | yes |
+| 4 | 21.481 ms | 13.920 ms | 1.543x | yes |
+
+Summary:
+
+- **192/192 generated tokens exact** under the matched FP16 reference.
+- **median integrated speedup: 1.315x**
+- median dense latency across rounds: ~18.201 ms/token
+- median ProofBits latency across rounds: ~13.366 ms/token
+
+A separate diagnostic ProofBits trajectory found:
+
+- mean survivors: **6.21 / 262,144 = 0.00237%**
+- median survivors: **1.5 rows**
+
+This is the strongest integrated matched-reference case so far and is consistent with the intended deployment target: compact models with very large vocabularies / output spaces where the decision head is a large fraction of decode cost.
+
+---
+
+## Integrated native-MLX FP16 serving reference
+
+To avoid an unfair comparison, native MLX FP16 matvec and ProofBits were rerun in 4-round AB/BA tests with **no survivor diagnostics in either timed path**. Both use the same FP16 head storage and the same MLX KV-cache body.
+
+### Qwen
+
+Per-round native-MLX / ProofBits latency ratios:
+
+- 1.145x
+- 1.107x
+- 1.109x
+- 1.090x
+
+Summary:
+
+- **median speedup vs native MLX FP16: 1.108x**
+- however, native MLX and ProofBits generated sequences differ in these tests because reduction/accumulation semantics differ.
+
+Therefore this Qwen comparison is a **performance reference only**, not an exact-equivalent serving claim.
+
+### Gemma
+
+Per-round native-MLX / ProofBits ratios:
+
+- 1.087x
+- 1.130x
+- 1.206x
+- 1.185x
+
+Summary:
+
+- **median speedup vs native MLX FP16: 1.158x**
+- all 4x48-token tested trajectories matched between native MLX FP16 and ProofBits.
+
+This is currently the strongest practical serving result. The sequence equality is empirical for the tested trajectories; mathematical exactness is still defined relative to the specified matched FP16 accumulation/tie semantics, not arbitrary vendor reduction orders.
+
+---
+
+## Exactness semantics
+
+The formal exactness claim is deliberately narrow and reproducible:
+
+> ProofBits returns the same decision as evaluation of the same stored FP16 weights under the specified reference accumulation/reduction and tie policy.
+
+Vendor libraries may use different reduction trees, fused operations, accumulator dtypes, or tie behavior. Therefore native-framework equality is measured empirically and never assumed. Qwen demonstrates that such differences can alter a generated trajectory; Gemma demonstrates a case where the tested native trajectory still matches.
 
 ---
 
 ## ProofBits+ logical ceiling
 
-Lossless high-byte compression is a secondary branch, not the current main system.
+Lossless high-byte compression remains a secondary branch, not the current main system.
 
 A 6-bit palette+escape representation covers ~98.2–98.6% of high bytes and gives ~6.11–6.14 logical bits/weight for the prefix plane across Qwen0.5, Gemma270M, and Qwen1.5B.
 
-If suffix traffic remains negligible, the logical FP16/full-prefix ceiling becomes ~2.60–2.62x rather than 2x. No packed GPU decoder has been benchmarked, so do not turn this into a latency claim.
+If suffix traffic remains negligible, the logical FP16/full-prefix ceiling becomes ~2.60–2.62x rather than 2x. No packed GPU decoder has been benchmarked, so this is **not** a latency claim.
 
 ---
 
-## Current claim boundary
+# Current defensible claim boundary
 
-Supported now:
+## Supported now
 
-> On an Apple M1 accelerator, a lossless decision-certified FP16 output head can skip almost all low-byte weight reads and achieve an exact decision-head speedup of roughly **1.58x (Qwen)** and **1.63x (Gemma)** versus a direct Apple MPS FP16 matrix-vector + GPU-argmax baseline in same-VM counterbalanced tests.
+1. **Exact matched-reference decision:** ProofBits can avoid almost all FP16 suffix reads while exactly reproducing the specified stored-FP16 reference argmax/top-k decision.
+2. **Actual accelerator speedup:** on Apple M1, full decision-head speedups of ~1.58x (Qwen) and ~1.63x (Gemma) were measured against direct Apple MPS FP16 matrix-vector + GPU argmax in same-VM counterbalanced tests.
+3. **Integrated autoregressive speedup:** in MLX-LM, matched-reference greedy decoding showed ~1.204x on one Qwen trajectory and ~1.315x on one Gemma trajectory, with all matched tokens exact.
+4. **Cross-prompt Qwen exactness:** 160/160 tokens across five prompt families were exact; median integrated speedup was ~1.064x, but one prompt was slower (~0.958x).
+5. **Native serving reference:** Gemma ProofBits was ~1.158x faster than native MLX FP16 in a fair no-diagnostic counterbalanced test and generated the same tested trajectories.
+6. **Large-vocabulary behavior:** Gemma's 262k-vocabulary integrated diagnostic retained only ~6.21 rows on average for suffix refinement.
 
-Not yet supported:
+## Not supported
 
-- integrated whole-transformer token/s speedup;
-- NVIDIA CUDA/Triton latency or Nsight DRAM counters;
-- universal speedup across hardware;
-- full softmax/top-p efficiency comparable to argmax/top-k;
+- universal speedup across prompts, models, hardware, or batch sizes;
+- mathematical equivalence to arbitrary vendor-library reduction semantics;
+- NVIDIA CUDA/Triton latency or Nsight DRAM-counter claims;
+- efficient full-softmax/top-p comparable to greedy/top-k;
 - large-batch throughput superiority;
-- production-grade fused implementation.
+- production-grade packed ProofBits+ latency gains.
 
-## Highest-priority next experiment
+## Highest-priority next experiments
 
-Integrate the ProofBits custom Metal head directly into an MLX-LM autoregressive decode path. MLX supports custom Metal kernels and unified CPU/GPU memory, so it may permit the body hidden state to flow directly into ProofBits without the PyTorch/Swift component boundary. If successful, measure exact greedy token equality and actual tokens/s versus native MLX dense decoding.
+1. **Gemma cross-prompt integrated replication** — strongest deployment case must be tested across prompt families, not one trajectory.
+2. **Context-length sweep** — measure integrated speedup as KV/body cost rises, to quantify the Amdahl boundary directly.
+3. **NVIDIA CUDA/Triton benchmark + Nsight DRAM counters** — test whether conditional byte fetching transfers to datacenter GPU memory systems.
+4. **Longer trajectories / multiple seeds/prompts** — tighten confidence intervals and characterize rare slow cases.
+5. **Optional ProofBits+ packed decoder** — only after the 8+8 implementation is fully characterized.
