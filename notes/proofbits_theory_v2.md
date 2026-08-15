@@ -19,7 +19,53 @@ No probability model is assumed.
 For FP16 8+8 ProofBits, the prefix is exactly the high byte. It contains the
 sign, all five exponent bits and the two most significant fraction bits. The
 unread low byte enumerates the remaining eight fraction bits. A 256-entry LUT
-therefore maps a high byte to exact finite endpoints \((\ell,u)\).
+*could* map a high byte to exact finite endpoints, but the final implementation
+does not need to read such a LUT.
+
+### Proposition 0 — LUT-free FP16 extremal suffix
+
+Let \(s_w\in\{0,1\}\) be the weight sign bit contained in the high byte and
+\(s_h=\mathbf 1[h_j<0]\). Among all 256 possible unread low bytes, the value
+that maximizes the coordinate contribution \(h_jW_{ij}\) has
+
+\[
+\boxed{
+\text{low-byte}=
+\begin{cases}
+\texttt{0xFF}, & s_w=s_h,\\
+\texttt{0x00}, & s_w\ne s_h.
+\end{cases}
+}
+\]
+
+**Proof.** For positive FP16 numbers with fixed high byte, increasing the low
+mantissa byte monotonically increases the represented value. For negative
+numbers it monotonically decreases the represented numerical value (increases
+its magnitude). If \(h_j\ge0\), maximize the weight value; if \(h_j<0\),
+minimize it. The four sign cases reduce exactly to equality of \(s_w\) and
+\(s_h\). For \(h_j=0\), either endpoint gives the same zero contribution.
+\(\square\)
+
+Thus the certificate endpoint can be constructed directly from the stored high
+byte and the hidden-state sign, then bitcast as FP16. No per-weight endpoint
+metadata or endpoint-LUT traffic is necessary.
+
+For the finite-precision safety term below, define the maximum possible absolute
+endpoint in row \(i\). For finite FP16, after stripping the sign bit, numerical
+magnitude is monotone in the remaining exponent/fraction code. Since maximum
+absolute completion always uses low byte `0xFF`, the implementation can reduce
+
+\[
+q_i=\max_j(\text{high}_{ij}\ \&\ \texttt{0x7F})
+\]
+
+as an integer and convert only the single row code
+
+\[
+(q_i\ll8)\,|\,\texttt{0xFF}
+\]
+
+to obtain \(M_i\). This avoids a second per-weight floating-point conversion.
 
 ## 2. One-accumulator upper bound
 
@@ -229,9 +275,10 @@ must reflect the actual FMA/reduction order and numerical semantics of the GPU
 kernel and the dense baseline. A loose sequential bound is safe but may retain
 more rows; a fixed tree reduction can admit a tighter bound.
 
-Importantly, \(M_i\) need not require another weight stream. It can be reduced
-from the same high-byte endpoints during the prefix scan. The hidden-state
-quantity \(\|h\|_1\) is computed once per query.
+Importantly, \(M_i\) requires no second weight stream or per-weight LUT in the
+final FP16 implementation: Proposition 0's signless high-byte magnitude code is
+max-reduced during the same high-byte scan. The hidden-state quantity
+\(\|h\|_1\) is computed once per query.
 
 ## 7. Representation-general form
 
@@ -253,6 +300,7 @@ Mathematics + current CPU experiments support:
 
 - lossless FP16 high/low byte-plane storage;
 - exact interval derivation from the high byte;
+- LUT-free extremal endpoint reconstruction from sign equality;
 - deterministic argmax and top-k retention under the stated arithmetic model;
 - identical upper-only and midpoint-radius interval bounds;
 - conditional suffix necessity: eliminated rows' suffixes cannot change the
