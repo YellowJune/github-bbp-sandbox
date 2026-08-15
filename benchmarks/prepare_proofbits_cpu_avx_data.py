@@ -21,10 +21,11 @@ for r in ds:
         if len(hs)>=N:break
     if len(hs)>=N:break
 H=torch.stack(hs).contiguous();W=m.lm_head.weight.detach().cpu().half().contiguous();V,D=W.shape
-bits=(W.view(torch.int16).to(torch.int32)&0xffff).contiguous();high=((bits>>8)&255).to(torch.uint8).contiguous()
-# Write native little-endian uint16 words and byte-plane high bits.
+bits=(W.view(torch.int16).to(torch.int32)&0xffff).contiguous();high=((bits>>8)&255).to(torch.uint8).contiguous();low=(bits&255).to(torch.uint8).contiguous()
+# Write native little-endian uint16 words and both lossless byte planes.
 np.asarray(bits.numpy(),dtype=np.uint16).tofile(OUT/'full_u16.bin')
 high.numpy().tofile(OUT/'high_u8.bin')
+low.numpy().tofile(OUT/'low_u8.bin')
 H.numpy().astype(np.float32).tofile(OUT/'hidden_f32.bin')
-meta={'model':MODEL,'V':V,'D':D,'N':len(H),'full_bytes':int(2*V*D),'high_bytes':int(V*D)}
+meta={'model':MODEL,'V':V,'D':D,'N':len(H),'full_bytes':int(2*V*D),'high_bytes':int(V*D),'low_bytes':int(V*D)}
 (OUT/'meta.json').write_text(json.dumps(meta,indent=2));print(json.dumps(meta,indent=2))
