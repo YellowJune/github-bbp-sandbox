@@ -1,0 +1,44 @@
+name: ProofBits deployment hidden dtype stress
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_deployment_dtype.py'
+      - '.github/workflows/proofbits-deployment-dtype.yml'
+  workflow_dispatch:
+jobs:
+  eval:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - model: Qwen/Qwen2.5-0.5B-Instruct
+            dtype: float16
+          - model: Qwen/Qwen2.5-0.5B-Instruct
+            dtype: bfloat16
+          - model: unsloth/gemma-3-270m
+            dtype: float16
+          - model: unsloth/gemma-3-270m
+            dtype: bfloat16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PB_MODEL: ${{ matrix.model }}
+      PB_DTYPE: ${{ matrix.dtype }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python experiments/proofbits_deployment_dtype.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-deployment-${{ matrix.dtype }}-${{ strategy.job-index }}
+          path: experiments/artifacts/proofbits_deployment_dtype_*.json
+          if-no-files-found: warn
