@@ -1,0 +1,39 @@
+name: ProofBits FP16 GPU benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Hugging Face model id
+        required: true
+        default: Qwen/Qwen2.5-0.5B-Instruct
+      rep:
+        description: benchmark repetitions
+        required: true
+        default: '100'
+
+jobs:
+  benchmark:
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify GPU
+        run: nvidia-smi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch transformers accelerate triton
+      - name: Run benchmark
+        run: |
+          python benchmarks/benchmark_proofbits_fp16_gpu.py --model '${{ inputs.model }}' --rep '${{ inputs.rep }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofbits-fp16-gpu-benchmark
+          path: experiments/artifacts/proofbits_fp16_gpu_benchmark.json
+          if-no-files-found: error
