@@ -54,9 +54,11 @@ def eval_pb(h,exact,mid,rad):
     cand=(c+e)>=B
     idx=cand.nonzero().squeeze(1)
     pred=int(idx[exact[idx].argmax()]); ref=int(exact.argmax())
-    top=torch.topk(exact,k=2)
-    margin=float(top.values[0]-top.values[1])
-    return {'candidate_count':int(idx.numel()),'candidate_fraction':float(idx.numel()/exact.numel()),'exact':pred==ref,'margin':margin,'winner':ref,'runnerup':int(top.indices[1]),'pilot_contains_winner':bool((pilots==ref).any())}
+    # Explicitly mask the winner to guarantee a distinct runner-up index, including exact ties.
+    masked=exact.clone(); masked[ref]=-torch.inf
+    runnerup=int(masked.argmax())
+    margin=float(exact[ref]-exact[runnerup])
+    return {'candidate_count':int(idx.numel()),'candidate_fraction':float(idx.numel()/exact.numel()),'exact':pred==ref,'margin':margin,'winner':ref,'runnerup':runnerup,'pilot_contains_winner':bool((pilots==ref).any())}
 
 def main():
     log('load model'); tok=AutoTokenizer.from_pretrained(MODEL); m=AutoModelForCausalLM.from_pretrained(MODEL,torch_dtype=torch.float32); m.eval(); W=m.lm_head.weight.detach().float().cpu().contiguous(); V,D=W.shape
