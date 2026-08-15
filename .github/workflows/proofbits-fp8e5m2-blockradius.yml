@@ -1,0 +1,40 @@
+name: FP8 E5M2 block-radius ProofBits
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_fp8e5m2_blockradius.py'
+      - '.github/workflows/proofbits-fp8e5m2-blockradius.yml'
+  workflow_dispatch:
+jobs:
+  eval:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - model: Qwen/Qwen2.5-0.5B-Instruct
+            n: 48
+          - model: unsloth/gemma-3-270m
+            n: 48
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PB_MODEL: ${{ matrix.model }}
+      PB_N: ${{ matrix.n }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python experiments/proofbits_fp8e5m2_blockradius.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-fp8e5m2-blockradius-${{ strategy.job-index }}
+          path: experiments/artifacts/proofbits_fp8e5m2_blockradius_*.json
+          if-no-files-found: warn
