@@ -31,7 +31,7 @@ jobs:
           python - <<'PY'
           import json
           m=json.load(open('benchmarks/tmp_proofbits_cpu/meta.json'))
-          open('/tmp/dims','w').write(f"{m['V']} {m['D']} {m['N']}")
+          open('/tmp/dims','w').write(f"{m['V']} {m['D']} {m['N']}\n")
           PY
           read V D N < /tmp/dims
           ./benchmarks/proofbits_cpu_avx benchmarks/tmp_proofbits_cpu "$V" "$D" "$N" 1,2,4 | tee experiments/artifacts/proofbits_cpu_avx_microbench.json
