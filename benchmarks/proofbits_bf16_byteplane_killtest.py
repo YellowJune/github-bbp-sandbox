@@ -21,43 +21,38 @@ PROMPTS = [
 ]
 
 
-def bits_bf16(x):
-    # reinterpret bfloat16 storage as unsigned 16-bit values
-    return x.contiguous().view(torch.uint16)
+def bits_i32(x):
+    # CPU PyTorch has incomplete uint16 bitwise support. Reinterpret as signed
+    # int16, widen to int32, then mask back to the raw 16-bit storage pattern.
+    return x.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
 
 
-def bits_fp16(x):
-    return x.contiguous().view(torch.uint16)
-
-
-def from_bits(bits, dtype):
+def from_bits(bits_i32, dtype):
+    raw_i16 = bits_i32.to(torch.int16).contiguous()
     if dtype == torch.bfloat16:
-        return bits.contiguous().view(torch.bfloat16)
+        return raw_i16.view(torch.bfloat16)
     if dtype == torch.float16:
-        return bits.contiguous().view(torch.float16)
+        return raw_i16.view(torch.float16)
     raise ValueError(dtype)
 
 
 def certify(weight, h, dtype):
-    """Pilot=1 byte-plane certificate with exact stored-dtype values / FP32 dot semantics."""
     V, D = weight.shape
     h = h.float().contiguous()
-    hs = (h < 0).to(torch.uint16) * 0x80
+    hs = (h < 0).to(torch.int32) * 0x80
     pilot_u = None
     pilot_idx = -1
     upper_chunks = []
 
-    # First pass: certified upper scores from only high byte.
     for s in range(0, V, CHUNK):
         e = min(V, s + CHUNK)
         w = weight[s:e].contiguous()
-        b = (bits_bf16(w) if dtype == torch.bfloat16 else bits_fp16(w))
+        b = bits_i32(w)
         high = b >> 8
         ws = high & 0x80
-        suffix = torch.where(ws == hs[None, :], torch.tensor(0x00FF, dtype=torch.uint16), torch.tensor(0x0000, dtype=torch.uint16))
+        suffix = torch.where(ws == hs[None, :], torch.full_like(high, 0x00FF), torch.zeros_like(high))
         raw = (high << 8) | suffix
         endpoint = from_bits(raw, dtype).float()
-        # Non-finite endpoints are a hard failure for this simple native byte split.
         if not torch.isfinite(endpoint).all():
             return {"finite": False, "reason": "nonfinite_interval_endpoint"}
         U = endpoint @ h
@@ -67,14 +62,11 @@ def certify(weight, h, dtype):
             pilot_u = float(m)
             pilot_idx = s + int(j)
 
-    # Exact pilot score gives a valid lower bound on the true maximum.
     B = float(torch.dot(weight[pilot_idx].float(), h))
     survivors = 0
-    winner_survives = False
     best = -float("inf")
     best_idx = -1
     offset = 0
-    # Dense exact reference and survivor count; chunked to cap memory.
     for s in range(0, V, CHUNK):
         e = min(V, s + CHUNK)
         U = upper_chunks[offset]; offset += 1
@@ -83,12 +75,10 @@ def certify(weight, h, dtype):
         m, j = torch.max(z, dim=0)
         if float(m) > best:
             best = float(m); best_idx = s + int(j)
-    # Locate winner's U without reconstructing again.
     c = best_idx // CHUNK
     local = best_idx - c * CHUNK
     winner_survives = bool(float(upper_chunks[c][local]) >= B)
 
-    # Refine surviving rows only and recover winner.
     refined_best = -float("inf")
     refined_idx = -1
     offset = 0
@@ -120,7 +110,7 @@ def certify(weight, h, dtype):
 def main():
     torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
     tok = AutoTokenizer.from_pretrained(MODEL)
-    model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, low_cpu_mem_usage=True)
     model.eval()
     out_emb = model.get_output_embeddings()
     if out_emb is None or not hasattr(out_emb, "weight"):
@@ -134,8 +124,7 @@ def main():
         for text in PROMPTS[:N]:
             x = tok(text, return_tensors="pt")
             o = model(**x, output_hidden_states=True, use_cache=False)
-            h = o.hidden_states[-1][0, -1].detach().cpu().float()
-            hidden.append(h)
+            hidden.append(o.hidden_states[-1][0, -1].detach().cpu().float())
 
     rows = []
     for i, h in enumerate(hidden):
@@ -173,8 +162,7 @@ def main():
     }
     Path("experiments/artifacts").mkdir(parents=True, exist_ok=True)
     slug = MODEL.split("/")[-1].replace(".", "_")
-    p = Path(f"experiments/artifacts/proofbits_bf16_killtest_{slug}.json")
-    p.write_text(json.dumps(result, indent=2))
+    Path(f"experiments/artifacts/proofbits_bf16_killtest_{slug}.json").write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
 
 if __name__ == "__main__":
