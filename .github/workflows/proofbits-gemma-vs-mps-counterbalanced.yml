@@ -1,0 +1,63 @@
+name: Gemma ProofBits vs direct MPS counterbalanced
+on:
+  push:
+    paths:
+      - '.github/workflows/proofbits-gemma-vs-mps-counterbalanced.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch numpy
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python benchmarks/prepare_proofbits_gemma_metal_data.py
+      - name: Compile ProofBits and MPS binaries
+        run: |
+          xcrun -sdk macosx metal -c benchmarks/proofbits_metal_head.metal -o /tmp/proofbits_head.air
+          xcrun -sdk macosx metallib /tmp/proofbits_head.air -o /tmp/proofbits_head.metallib
+          xcrun -sdk macosx metal -c benchmarks/proofbits_mps_argmax.metal -o /tmp/mps_argmax.air
+          xcrun -sdk macosx metallib /tmp/mps_argmax.air -o /tmp/mps_argmax.metallib
+          swiftc -O -framework Metal benchmarks/proofbits_metal_full_bench.swift -o /tmp/proofbits_full
+          swiftc -O -framework Metal -framework MetalPerformanceShaders benchmarks/proofbits_mps_direct.swift -o /tmp/mps_direct
+      - name: Counterbalanced measurements on same M1 VM
+        run: |
+          set -e
+          mkdir -p experiments/artifacts/gemma_counterbalanced
+          for round in 1 2 3 4; do
+            if [ $((round % 2)) -eq 1 ]; then order='mps pb'; else order='pb mps'; fi
+            for method in $order; do
+              if [ "$method" = mps ]; then
+                /tmp/mps_direct benchmarks/tmp_proofbits_gemma /tmp/mps_argmax.metallib 8 3 >/tmp/gemma_mps_${round}.txt
+                cp benchmarks/tmp_proofbits_gemma/proofbits_mps_direct.json experiments/artifacts/gemma_counterbalanced/mps_${round}.json
+              else
+                /tmp/proofbits_full benchmarks/tmp_proofbits_gemma /tmp/proofbits_head.metallib 8 3 >/tmp/gemma_pb_${round}.txt
+                cp benchmarks/tmp_proofbits_gemma/proofbits_metal_full.json experiments/artifacts/gemma_counterbalanced/pb_${round}.json
+              fi
+            done
+          done
+          python - <<'PY'
+          import json,statistics,pathlib
+          root=pathlib.Path('experiments/artifacts/gemma_counterbalanced');rows=[]
+          for r in range(1,5):
+              m=json.load(open(root/f'mps_{r}.json'));p=json.load(open(root/f'pb_{r}.json'))
+              mg=m['gpu']['median_ms'];pg=p['proofbits_decision_gpu']['median_ms'];mw=m['wall']['median_ms'];pw=p['proofbits_decision_wall']['median_ms']
+              rows.append({'round':r,'mps_gpu_ms':mg,'proofbits_gpu_ms':pg,'gpu_speedup':mg/pg,'mps_wall_ms':mw,'proofbits_wall_ms':pw,'wall_speedup':mw/pw,'pb_all_exact':p['all_exact']})
+          out={'kind':'gemma_proofbits_vs_direct_mps_same_vm_counterbalanced','rounds':rows,'median_gpu_speedup':statistics.median(x['gpu_speedup'] for x in rows),'mean_gpu_speedup':statistics.mean(x['gpu_speedup'] for x in rows),'median_wall_speedup':statistics.median(x['wall_speedup'] for x in rows),'all_proofbits_exact':all(x['pb_all_exact'] for x in rows)}
+          json.dump(out,open(root/'summary.json','w'),indent=2);print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-gemma-vs-mps-counterbalanced
+          path: experiments/artifacts/gemma_counterbalanced/
+          if-no-files-found: error
