@@ -1,12 +1,16 @@
-"""GPU benchmark harness for the FINAL LUT-free ProofBits FP16 upper-only path.
+"""GPU benchmark harness for the FINAL LUT-free ProofBits FP16 pilot-1 path.
 
 Run on a CUDA self-hosted runner. Reports native FP16, matched dense byte-plane,
-raw ProofBits, conservative roundoff-safe ProofBits, exactness, S-union-P low
-byte rows, idealized bytes, and measured latency.
+raw ProofBits, conservative roundoff-safe ProofBits, exactness, low-byte rows,
+idealized bytes, and measured latency.
+
+Final fast path:
+    high-byte certified upper scores -> argmax(U) -> exact one-row pilot ->
+    threshold U>=B -> sparse low-byte refinement -> exact final decision.
 
 The high-byte upper pass uses direct FP16 endpoint reconstruction: append low
 suffix 0xFF iff hidden sign equals stored-weight sign, else append 0x00. No
-endpoint LUT is read in the main pass.
+endpoint LUT or per-weight metadata is read in the main pass.
 
 Publication-grade GPU claims still require a coefficient derived for the actual
 compiled reduction semantics and Nsight/CUPTI DRAM counters.
@@ -69,7 +73,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--prompt", default="Solve carefully: 137 * 29 =")
-    ap.add_argument("--pilot-k", type=int, default=4)
+    ap.add_argument("--pilot-k", type=int, default=1,
+                    help="Final fast path is 1; larger values are retained only for ablations.")
     ap.add_argument("--fallback-fraction", type=float, default=1.0)
     ap.add_argument("--rounding-factor", type=int, default=4)
     ap.add_argument("--rep", type=int, default=100)
@@ -144,7 +149,7 @@ def main():
     safe_t = bench_ms(pb_safe, rep=args.rep)
 
     report = {
-        "kind": "proofbits_fp16_lutfree_upperonly_gpu_benchmark",
+        "kind": "proofbits_fp16_lutfree_upperonly_pilot1_gpu_benchmark",
         "model": args.model,
         "gpu": torch.cuda.get_device_name(0),
         "compute_capability": list(torch.cuda.get_device_capability(0)),
@@ -182,10 +187,11 @@ def main():
             "safe_vs_triton_dense_median": float(triton_t["median_ms"]/safe_t["median_ms"]),
         },
         "notes": [
+            "Default pilot=1 uses a single argmax(U), then exact-refines one row to obtain the threshold B.",
             "The main upper pass is LUT-free: it reconstructs the extremal FP16 suffix directly from hidden/weight sign equality.",
             "The Triton dense byte-plane kernel is the matched correctness reference.",
             "Native PyTorch FP16 GEMV is the important performance baseline but may use different accumulation/output semantics; argmax equality is reported rather than assumed.",
-            "Current ProofBits top-k/nonzero/unique orchestration and pilot reuse are not fused, so this is not the final optimized kernel.",
+            "Current threshold/compaction/final-reduction orchestration is not fully fused, so this is still not the final optimized kernel.",
             "h_l1_upper is precomputed outside the timed call; production code must fuse/device-compute and account for it.",
             "Publication claims require Nsight/CUPTI DRAM counters and an implementation-specific rounding proof.",
         ],
