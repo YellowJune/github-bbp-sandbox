@@ -10,6 +10,18 @@ on:
         description: benchmark repetitions
         required: true
         default: '100'
+      pilot_k:
+        description: exact pilot rows selected by safe upper bound
+        required: true
+        default: '4'
+      rounding_factor:
+        description: conservative coefficient uses 2*gamma_(factor*d); CPU stress used 4
+        required: true
+        default: '4'
+      fallback_fraction:
+        description: dense low-byte fallback when survivor fraction exceeds this threshold
+        required: true
+        default: '1.0'
 
 jobs:
   benchmark:
@@ -23,15 +35,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Verify GPU
-        run: nvidia-smi
+      - name: Verify GPU and profiler availability
+        run: |
+          nvidia-smi
+          if command -v ncu >/dev/null 2>&1; then
+            echo 'Nsight Compute available:'
+            ncu --version
+          else
+            echo 'Nsight Compute (ncu) not found; wall-clock benchmark will still run.'
+          fi
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install torch transformers accelerate triton
-      - name: Run benchmark
+      - name: Static syntax check
         run: |
-          python benchmarks/benchmark_proofbits_fp16_gpu.py --model '${{ inputs.model }}' --rep '${{ inputs.rep }}'
+          python -m py_compile kernels/proofbits_triton_fp16_upperonly.py
+          python -m py_compile benchmarks/benchmark_proofbits_fp16_gpu.py
+      - name: Run final upper-only raw and roundoff-safe benchmark
+        run: |
+          python benchmarks/benchmark_proofbits_fp16_gpu.py \
+            --model '${{ inputs.model }}' \
+            --rep '${{ inputs.rep }}' \
+            --pilot-k '${{ inputs.pilot_k }}' \
+            --rounding-factor '${{ inputs.rounding_factor }}' \
+            --fallback-fraction '${{ inputs.fallback_fraction }}'
       - uses: actions/upload-artifact@v4
         with:
           name: proofbits-fp16-gpu-benchmark
