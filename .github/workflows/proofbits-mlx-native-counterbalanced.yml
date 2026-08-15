@@ -1,0 +1,38 @@
+name: ProofBits versus native MLX counterbalanced
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_mlx_native_counterbalanced.py'
+      - '.github/workflows/proofbits-mlx-native-counterbalanced.yml'
+  workflow_dispatch:
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - mlx-community/Qwen2.5-0.5B-Instruct-bf16
+          - mlx-community/gemma-3-270m-bf16
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PB_MODEL: ${{ matrix.model }}
+      PB_TOKENS: '48'
+      PB_ROUNDS: '4'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade mlx mlx-lm
+      - run: python benchmarks/proofbits_mlx_native_counterbalanced.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-native-${{ strategy.job-index }}
+          path: experiments/artifacts/proofbits_native_counterbalanced_*.json
+          if-no-files-found: warn
