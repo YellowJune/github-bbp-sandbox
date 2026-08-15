@@ -15,12 +15,12 @@ PROMPTS = [
 ]
 
 
-def bits16(x):
-    return x.contiguous().view(torch.uint16)
+def bits_i32(x):
+    return x.contiguous().view(torch.int16).to(torch.int32) & 0xFFFF
 
 
-def from_bf16_bits(x):
-    return x.contiguous().view(torch.bfloat16)
+def from_bf16_bits(x_i32):
+    return x_i32.to(torch.int16).contiguous().view(torch.bfloat16)
 
 
 def dense_winner(W, h):
@@ -38,22 +38,21 @@ def dense_winner(W, h):
 def certify_prefix(W, h, p, dense_idx):
     V, D = W.shape
     q = 16 - p
-    suffix_mask_int = (1 << q) - 1
-    suffix_mask = torch.tensor(suffix_mask_int, dtype=torch.uint16)
-    clear_mask = torch.tensor((0xFFFF ^ suffix_mask_int), dtype=torch.uint16)
-    hs = ((h < 0).to(torch.uint16) * 0x8000)
+    suffix_mask = (1 << q) - 1
+    clear_mask = 0xFFFF ^ suffix_mask
+    hs = (h < 0).to(torch.int32) * 0x8000
     upper = []
     pilot_val = -float("inf"); pilot_idx = -1
 
     for s in range(0, V, CHUNK):
         e = min(V, s + CHUNK)
-        b = bits16(W[s:e])
+        b = bits_i32(W[s:e])
         base = b & clear_mask
         ws = base & 0x8000
         endpoint_bits = torch.where(ws == hs[None, :], base | suffix_mask, base)
         endpoint = from_bf16_bits(endpoint_bits).float()
         if not torch.isfinite(endpoint).all():
-            return {"prefix_bits": p, "finite": False}
+            return {"prefix_bits": p, "finite": False, "reason": "nonfinite_interval_endpoint"}
         U = endpoint @ h
         upper.append(U)
         m, j = torch.max(U, dim=0)
@@ -65,7 +64,6 @@ def certify_prefix(W, h, p, dense_idx):
     c = dense_idx // CHUNK; local = dense_idx - c * CHUNK
     winner_survives = float(upper[c][local]) >= B
 
-    # Exact winner among survivors.
     refined_best = -float("inf"); refined_idx = -1
     for ci, s in enumerate(range(0, V, CHUNK)):
         e = min(V, s + CHUNK)
@@ -97,7 +95,7 @@ def certify_prefix(W, h, p, dense_idx):
 def main():
     torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
     tok = AutoTokenizer.from_pretrained(MODEL)
-    model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, low_cpu_mem_usage=True)
     model.eval()
     W = model.get_output_embeddings().weight.detach().cpu().to(torch.bfloat16).contiguous()
     V, D = W.shape
