@@ -1,0 +1,38 @@
+name: ProofBits native BF16 byte-plane kill test
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_bf16_byteplane_killtest.py'
+      - '.github/workflows/proofbits-bf16-byteplane-killtest.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - Qwen/Qwen2.5-0.5B-Instruct
+          - unsloth/gemma-3-270m
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      PB_MODEL: ${{ matrix.model }}
+      PB_N: '8'
+      PB_CHUNK: '4096'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch 'transformers>=4.55,<5' accelerate sentencepiece
+      - run: python benchmarks/proofbits_bf16_byteplane_killtest.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-bf16-${{ strategy.job-index }}
+          path: experiments/artifacts/proofbits_bf16_killtest_*.json
+          if-no-files-found: warn
