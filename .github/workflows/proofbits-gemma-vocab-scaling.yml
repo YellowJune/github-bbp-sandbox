@@ -1,0 +1,30 @@
+name: Controlled Gemma vocabulary scaling ProofBits
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_gemma_vocab_scaling.py'
+      - '.github/workflows/proofbits-gemma-vocab-scaling.yml'
+  workflow_dispatch:
+jobs:
+  eval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python experiments/proofbits_gemma_vocab_scaling.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-gemma-vocab-scaling
+          path: experiments/artifacts/proofbits_gemma_vocab_scaling.json
+          if-no-files-found: warn
