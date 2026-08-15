@@ -15,11 +15,12 @@ MAX_NEW = 48
 WARMUP_NEW = 6
 ROUNDS = 4
 
-# One SIMDgroup (32 lanes) evaluates one vocabulary row.  Qwen D=896=28*32.
+# One SIMDgroup (32 lanes) evaluates one vocabulary row. Qwen D=896=28*32.
+# MLX injects <input>_shape metadata when referenced in custom Metal source.
 DENSE_SRC = r'''
     uint row = threadgroup_position_in_grid.x;
     uint lane = thread_index_in_simdgroup;
-    uint D = (uint)hidden.size();
+    uint D = (uint)hidden_shape[0];
     ulong base = (ulong)row * (ulong)D;
     float acc = 0.0f;
     for (uint j = lane; j < D; j += 32) {
@@ -32,7 +33,7 @@ DENSE_SRC = r'''
 UPPER_SRC = r'''
     uint row = threadgroup_position_in_grid.x;
     uint lane = thread_index_in_simdgroup;
-    uint D = (uint)hidden.size();
+    uint D = (uint)hidden_shape[0];
     ulong base = (ulong)row * (ulong)D;
     float acc = 0.0f;
     for (uint j = lane; j < D; j += 32) {
@@ -50,7 +51,7 @@ UPPER_SRC = r'''
 
 PILOT_SRC = r'''
     uint lane = thread_index_in_simdgroup;
-    uint D = (uint)hidden.size();
+    uint D = (uint)hidden_shape[0];
     uint row = (uint)pilot[0];
     ulong base = (ulong)row * (ulong)D;
     float acc = 0.0f;
@@ -66,7 +67,7 @@ PILOT_SRC = r'''
 REFINE_SRC = r'''
     uint row = threadgroup_position_in_grid.x;
     uint lane = thread_index_in_simdgroup;
-    uint D = (uint)hidden.size();
+    uint D = (uint)hidden_shape[0];
     float B = bound[0];
     if (upper[row] < B) {
         if (lane == 0) exact[row] = -3.402823466e+38f;
@@ -154,13 +155,13 @@ def call_proofbits(k_upper, k_pilot, k_refine, high, low, h32, V, diagnostics=Fa
 
 
 def prepare_weights(model):
-    # Qwen ties output projection to token embeddings.  We cast once to the
-    # matched lossless FP16 storage used by both dense and ProofBits paths.
+    # Qwen ties output projection to token embeddings. Cast once to the matched
+    # FP16 storage used by both dense and ProofBits paths.
     w_src = model.model.embed_tokens.weight
     w16 = w_src.astype(mx.float16)
     mx.eval(w16)
-    # Setup is outside timed generation.  Extract exact IEEE-754 binary16 bytes.
-    w_np = np.asarray(w16, dtype=np.float16)
+    # Setup is outside timed generation. Extract exact IEEE-754 binary16 bytes.
+    w_np = np.array(w16, copy=True).astype(np.float16, copy=False)
     bits = w_np.view(np.uint16)
     high_np = (bits >> 8).astype(np.uint8, copy=True)
     low_np = (bits & 0xFF).astype(np.uint8, copy=True)
@@ -179,7 +180,7 @@ def tokenize(tok):
 
 
 def decode_once(model, tok, mode, kernels, w16, high, low, max_new, collect_diag=False):
-    V, D = w16.shape
+    V, D = [int(x) for x in w16.shape]
     prompt = tokenize(tok)
     kv = cache_mod.make_prompt_cache(model)
     dense_k, upper_k, pilot_k, refine_k = kernels
@@ -244,8 +245,6 @@ def decode_once(model, tok, mode, kernels, w16, high, low, max_new, collect_diag
 
 
 def warmup(model, tok, kernels, w16, high, low):
-    # Compile body + all three head paths. Short independent caches avoid
-    # contaminating timed decode state.
     for mode in ["dense_custom_fp16", "proofbits_fp16", "native_mlx_fp16"]:
         _ = decode_once(model, tok, mode, kernels, w16, high, low, WARMUP_NEW, False)
     mx.synchronize()
