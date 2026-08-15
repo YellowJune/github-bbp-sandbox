@@ -38,15 +38,14 @@ kernel void proofbits_high_upper_row(
         ushort weightSign = (ushort)(hb & (uchar)0x80);
         ushort hiddenSign = (h[j] < 0.0f) ? (ushort)0x80 : (ushort)0x00;
         ushort suffix = (weightSign == hiddenSign) ? (ushort)0x00FF : (ushort)0x0000;
-        half endpoint = as_type<half>(((ushort)hb << 8) | suffix);
+        ushort raw = ((ushort)hb << 8) | suffix;
+        half endpoint = as_type<half>(raw);
         acc = fma(h[j], (float)endpoint, acc);
     }
     float total = simd_sum(acc);
     if (lane == 0) out[row] = total;
 }
 
-// First stage of deterministic argmax. Each SIMDgroup scans up to ARG_CHUNK
-// values and emits one (value,index) pair. Ties prefer the lower original index.
 kernel void argmax_stage1(
     device const float* values [[buffer(0)]],
     device float* block_values [[buffer(1)]],
@@ -113,8 +112,6 @@ kernel void exact_pilot_row(
     if (lane == 0) out_B[0] = total;
 }
 
-// All vocabulary rows are launched, but rejected rows read only U and B and
-// return before touching low-byte weights. Survivors reconstruct exact FP16.
 kernel void conditional_refine_row(
     device const uchar* high [[buffer(0)]],
     device const uchar* low [[buffer(1)]],
