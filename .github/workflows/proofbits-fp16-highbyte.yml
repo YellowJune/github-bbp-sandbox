@@ -1,0 +1,37 @@
+name: FP16 high-byte ProofBits
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_fp16_highbyte.py'
+      - '.github/workflows/proofbits-fp16-highbyte.yml'
+  workflow_dispatch:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - Qwen/Qwen2.5-0.5B-Instruct
+          - Qwen/Qwen3-0.6B
+          - HuggingFaceTB/SmolLM2-360M-Instruct
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      MODEL: ${{ matrix.model }}
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python experiments/proofbits_fp16_highbyte.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fp16-highbyte-${{ strategy.job-index }}
+          path: experiments/artifacts/fp16_highbyte_*.json
+          if-no-files-found: error
