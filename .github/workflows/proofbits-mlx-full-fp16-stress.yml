@@ -1,0 +1,33 @@
+name: ProofBits full-model FP16 MLX replicated stress
+on:
+  push:
+    paths:
+      - 'benchmarks/proofbits_mlx_full_fp16_stress.py'
+      - '.github/workflows/proofbits-mlx-full-fp16-stress.yml'
+  workflow_dispatch:
+jobs:
+  replicate:
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade mlx mlx-lm numpy
+      - run: python benchmarks/proofbits_mlx_full_fp16_stress.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-full-fp16-stress-rep-${{ matrix.rep }}
+          path: experiments/artifacts/proofbits_mlx_full_fp16_stress.json
+          if-no-files-found: warn
