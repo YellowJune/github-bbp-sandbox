@@ -1,0 +1,31 @@
+name: ProofBits query geometry controls
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_query_geometry_controls.py'
+      - '.github/workflows/proofbits-query-geometry-controls.yml'
+  workflow_dispatch:
+jobs:
+  eval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - run: python -m py_compile experiments/proofbits_query_geometry_controls.py
+      - run: python experiments/proofbits_query_geometry_controls.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proofbits-query-geometry-controls
+          path: experiments/artifacts/proofbits_query_geometry_controls.json
+          if-no-files-found: warn
