@@ -15,8 +15,6 @@ MAX_NEW = 48
 WARMUP_NEW = 6
 ROUNDS = 4
 
-# One SIMDgroup (32 lanes) evaluates one vocabulary row. Qwen D=896=28*32.
-# MLX injects <input>_shape metadata when referenced in custom Metal source.
 DENSE_SRC = r'''
     uint row = threadgroup_position_in_grid.x;
     uint lane = thread_index_in_simdgroup;
@@ -96,77 +94,41 @@ def pct(xs, p):
 
 
 def make_kernels():
-    dense = mx.fast.metal_kernel(
-        name="pb_mlx_dense_fp16_row",
-        input_names=["weight", "hidden"], output_names=["out"], source=DENSE_SRC
-    )
-    upper = mx.fast.metal_kernel(
-        name="pb_mlx_upper_row",
-        input_names=["high", "hidden"], output_names=["upper"], source=UPPER_SRC
-    )
-    pilot = mx.fast.metal_kernel(
-        name="pb_mlx_exact_pilot",
-        input_names=["high", "low", "hidden", "pilot"], output_names=["bound"], source=PILOT_SRC
-    )
-    refine = mx.fast.metal_kernel(
-        name="pb_mlx_conditional_refine",
-        input_names=["high", "low", "hidden", "upper", "bound"], output_names=["exact"], source=REFINE_SRC
-    )
+    dense = mx.fast.metal_kernel(name="pb_mlx_dense_fp16_row", input_names=["weight", "hidden"], output_names=["out"], source=DENSE_SRC)
+    upper = mx.fast.metal_kernel(name="pb_mlx_upper_row", input_names=["high", "hidden"], output_names=["upper"], source=UPPER_SRC)
+    pilot = mx.fast.metal_kernel(name="pb_mlx_exact_pilot", input_names=["high", "low", "hidden", "pilot"], output_names=["bound"], source=PILOT_SRC)
+    refine = mx.fast.metal_kernel(name="pb_mlx_conditional_refine", input_names=["high", "low", "hidden", "upper", "bound"], output_names=["exact"], source=REFINE_SRC)
     return dense, upper, pilot, refine
 
 
 def call_dense(k, w16, h32, V):
-    scores = k(
-        inputs=[w16, h32],
-        grid=(V * 32, 1, 1), threadgroup=(32, 1, 1),
-        output_shapes=[(V,)], output_dtypes=[mx.float32], init_value=0.0,
-    )[0]
+    scores = k(inputs=[w16, h32], grid=(V * 32, 1, 1), threadgroup=(32, 1, 1), output_shapes=[(V,)], output_dtypes=[mx.float32], init_value=0.0)[0]
     return mx.argmax(scores).astype(mx.uint32)
 
 
 def call_native(w16, h32):
-    # Native MLX matvec baseline using the same FP16 storage representation.
     logits = mx.matmul(h32.astype(mx.float16), mx.transpose(w16))
     return mx.argmax(logits).astype(mx.uint32)
 
 
 def call_proofbits(k_upper, k_pilot, k_refine, high, low, h32, V, diagnostics=False):
-    U = k_upper(
-        inputs=[high, h32],
-        grid=(V * 32, 1, 1), threadgroup=(32, 1, 1),
-        output_shapes=[(V,)], output_dtypes=[mx.float32], init_value=0.0,
-    )[0]
-    p = mx.argmax(U).astype(mx.uint32)
-    B = k_pilot(
-        inputs=[high, low, h32, p],
-        grid=(32, 1, 1), threadgroup=(32, 1, 1),
-        output_shapes=[(1,)], output_dtypes=[mx.float32], init_value=0.0,
-    )[0]
-    exact = k_refine(
-        inputs=[high, low, h32, U, B],
-        grid=(V * 32, 1, 1), threadgroup=(32, 1, 1),
-        output_shapes=[(V,)], output_dtypes=[mx.float32], init_value=-3.402823466e38,
-    )[0]
+    U = k_upper(inputs=[high, h32], grid=(V * 32, 1, 1), threadgroup=(32, 1, 1), output_shapes=[(V,)], output_dtypes=[mx.float32], init_value=0.0)[0]
+    p = mx.reshape(mx.argmax(U).astype(mx.uint32), (1,))
+    B = k_pilot(inputs=[high, low, h32, p], grid=(32, 1, 1), threadgroup=(32, 1, 1), output_shapes=[(1,)], output_dtypes=[mx.float32], init_value=0.0)[0]
+    exact = k_refine(inputs=[high, low, h32, U, B], grid=(V * 32, 1, 1), threadgroup=(32, 1, 1), output_shapes=[(V,)], output_dtypes=[mx.float32], init_value=-3.402823466e38)[0]
     winner = mx.argmax(exact).astype(mx.uint32)
     if diagnostics:
-        survivors = mx.sum(U >= B)
-        return winner, survivors
+        return winner, mx.sum(U >= B)
     return winner
 
 
 def prepare_weights(model):
-    # Qwen ties output projection to token embeddings. Cast once to the matched
-    # FP16 storage used by both dense and ProofBits paths.
-    w_src = model.model.embed_tokens.weight
-    w16 = w_src.astype(mx.float16)
+    w16 = model.model.embed_tokens.weight.astype(mx.float16)
     mx.eval(w16)
-    # Setup is outside timed generation. Extract exact IEEE-754 binary16 bytes.
     w_np = np.array(w16, copy=True).astype(np.float16, copy=False)
     bits = w_np.view(np.uint16)
-    high_np = (bits >> 8).astype(np.uint8, copy=True)
-    low_np = (bits & 0xFF).astype(np.uint8, copy=True)
-    high = mx.array(high_np)
-    low = mx.array(low_np)
+    high = mx.array((bits >> 8).astype(np.uint8, copy=True))
+    low = mx.array((bits & 0xFF).astype(np.uint8, copy=True))
     mx.eval(high, low)
     return w16, high, low
 
@@ -185,16 +147,13 @@ def decode_once(model, tok, mode, kernels, w16, high, low, max_new, collect_diag
     kv = cache_mod.make_prompt_cache(model)
     dense_k, upper_k, pilot_k, refine_k = kernels
 
-    # Prefill body only. The output projection is deliberately excluded.
     t_prefill = time.perf_counter()
     body = model.model(prompt[None], cache=kv)
     h = body[:, -1, :].reshape((D,)).astype(mx.float32)
     mx.eval(h, [c.state for c in kv])
     prefill_ms = (time.perf_counter() - t_prefill) * 1e3
 
-    tokens = []
-    step_ms = []
-    survivor_counts = []
+    tokens, step_ms, survivor_counts = [], [], []
     for _ in range(max_new):
         t0 = time.perf_counter()
         if mode == "dense_custom_fp16":
@@ -209,7 +168,6 @@ def decode_once(model, tok, mode, kernels, w16, high, low, max_new, collect_diag
         else:
             raise ValueError(mode)
 
-        # Interactive decode semantics: materialize the next-token decision.
         mx.eval(y)
         if collect_diag and mode == "proofbits_fp16":
             mx.eval(s)
@@ -217,9 +175,7 @@ def decode_once(model, tok, mode, kernels, w16, high, low, max_new, collect_diag
         token = int(y.item())
         tokens.append(token)
 
-        # Feed the chosen token through exactly the same MLX KV-cache body.
-        inp = mx.array([[token]], dtype=mx.int32)
-        body = model.model(inp, cache=kv)
+        body = model.model(mx.array([[token]], dtype=mx.int32), cache=kv)
         h = body[:, -1, :].reshape((D,)).astype(mx.float32)
         mx.eval(h, [c.state for c in kv])
         step_ms.append((time.perf_counter() - t0) * 1e3)
@@ -246,7 +202,7 @@ def decode_once(model, tok, mode, kernels, w16, high, low, max_new, collect_diag
 
 def warmup(model, tok, kernels, w16, high, low):
     for mode in ["dense_custom_fp16", "proofbits_fp16", "native_mlx_fp16"]:
-        _ = decode_once(model, tok, mode, kernels, w16, high, low, WARMUP_NEW, False)
+        decode_once(model, tok, mode, kernels, w16, high, low, WARMUP_NEW, False)
     mx.synchronize()
 
 
@@ -258,41 +214,32 @@ def main():
     V, D = [int(x) for x in w16.shape]
     warmup(model, tok, kernels, w16, high, low)
 
-    # AB/BA counterbalancing for the exact matched-storage comparison.
-    rounds = []
-    dense_all = []
-    pb_all = []
+    rounds, dense_all, pb_all = [], [], []
     for r in range(ROUNDS):
         order = ["dense_custom_fp16", "proofbits_fp16"] if r % 2 == 0 else ["proofbits_fp16", "dense_custom_fp16"]
         res = {}
         for mode in order:
-            gc.collect()
-            mx.clear_cache()
+            gc.collect(); mx.clear_cache()
             res[mode] = decode_once(model, tok, mode, kernels, w16, high, low, MAX_NEW, False)
-        d = res["dense_custom_fp16"]
-        p = res["proofbits_fp16"]
-        exact_seq = d["tokens"] == p["tokens"]
-        speed = d["median_ms_per_token"] / p["median_ms_per_token"]
+        d, p = res["dense_custom_fp16"], res["proofbits_fp16"]
         rounds.append({
             "round": r + 1,
             "order": order,
             "dense_median_ms": d["median_ms_per_token"],
             "proofbits_median_ms": p["median_ms_per_token"],
-            "decode_speedup": speed,
+            "decode_speedup": d["median_ms_per_token"] / p["median_ms_per_token"],
             "dense_mean_ms": d["mean_ms_per_token"],
             "proofbits_mean_ms": p["mean_ms_per_token"],
-            "sequence_exact": exact_seq,
+            "sequence_exact": d["tokens"] == p["tokens"],
             "n_tokens": MAX_NEW,
         })
-        dense_all.append(d["median_ms_per_token"])
-        pb_all.append(p["median_ms_per_token"])
+        dense_all.append(d["median_ms_per_token"]); pb_all.append(p["median_ms_per_token"])
 
-    # One diagnostic ProofBits trajectory and one native-MLX FP16 trajectory.
     diag = decode_once(model, tok, "proofbits_fp16", kernels, w16, high, low, MAX_NEW, True)
     native = decode_once(model, tok, "native_mlx_fp16", kernels, w16, high, low, MAX_NEW, False)
     dense_ref = decode_once(model, tok, "dense_custom_fp16", kernels, w16, high, low, MAX_NEW, False)
-
     speedups = [x["decode_speedup"] for x in rounds]
+
     out = {
         "kind": "proofbits_integrated_mlx_greedy_decode",
         "model": MODEL,
@@ -318,12 +265,11 @@ def main():
             "Dense custom and ProofBits share exactly the same FP16 weight representation and MLX KV-cache body.",
             "Setup/conversion of the tied BF16 embedding to FP16 high/low planes is outside timed generation.",
             "Each decode step materializes the next token before feeding it back, matching interactive greedy serving semantics.",
-            "Native MLX FP16 matvec is reported as an additional optimized baseline; exactness headline uses matched custom dense FP16 accumulation order.",
+            "Native MLX FP16 matvec is an additional optimized baseline; exactness headline uses matched custom dense FP16 accumulation order."
         ],
     }
     Path("experiments/artifacts").mkdir(parents=True, exist_ok=True)
-    p = Path("experiments/artifacts/proofbits_mlx_integrated_decode.json")
-    p.write_text(json.dumps(out, indent=2, default=str))
+    Path("experiments/artifacts/proofbits_mlx_integrated_decode.json").write_text(json.dumps(out, indent=2, default=str))
     print(json.dumps(out, indent=2, default=str))
 
 
