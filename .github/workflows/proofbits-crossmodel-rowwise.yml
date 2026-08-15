@@ -1,0 +1,39 @@
+name: Cross-model row-wise ProofBits validation
+on:
+  push:
+    paths:
+      - 'experiments/proofbits_crossmodel_rowwise.py'
+      - '.github/workflows/proofbits-crossmodel-rowwise.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - Qwen/Qwen3-0.6B
+          - HuggingFaceTB/SmolLM2-360M-Instruct
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      MODEL: ${{ matrix.model }}
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'transformers>=4.55,<5' accelerate datasets
+      - name: Run validation
+        run: python experiments/proofbits_crossmodel_rowwise.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofbits-crossmodel-${{ strategy.job-index }}
+          path: experiments/artifacts/proofbits_crossmodel_*.json
+          if-no-files-found: error
