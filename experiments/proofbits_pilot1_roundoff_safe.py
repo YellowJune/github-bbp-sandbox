@@ -49,10 +49,10 @@ def boundary(H,Z,W,lo,hi,rowmax):
  for i,j in pairs:
   l,r=0.,1.;yi=int(Y[i])
   for _ in range(48):
-   a=(l+r)/2;y=int(((1-a)*Z[i]+a*Z[j]).argmax());
+   a=(l+r)/2;y=int(((1-a)*Z[i]+a*Z[j]).argmax())
    if y==yi:l=a
    else:r=a
-  a=(l+r)/2;h=((1-a)*H[i]+a*H[j])[None];ex=((1-a)*Z[i]+a*Z[j)[None]
+  a=(l+r)/2;h=((1-a)*H[i]+a*H[j])[None];ex=((1-a)*Z[i]+a*Z[j])[None]
   Us=safe(h,upper(h,lo,hi),rowmax,D);p=Us.argmax(1,keepdim=True);B=ex.gather(1,p).squeeze(1);idx=(Us[0]>=B[0]).nonzero().squeeze(1);ref=int(ex[0].argmax());pred=int(idx[ex[0,idx].argmax()]);c.append(len(idx));oks.append(pred==ref);tmp=ex[0].clone();tmp[ref]=-torch.inf;marg.append(float(ex[0,ref]-tmp.max()))
  a=np.asarray(c,float);f=a.mean()/W.shape[0];return {'n':len(c),'all_exact':bool(all(oks)),'mean':float(a.mean()),'median':float(np.median(a)),'p90':float(np.percentile(a,90)),'p99':float(np.percentile(a,99)),'max':int(a.max()),'fraction':float(f),'idealized_reduction':float(2/(1+f)),'margin_min':float(np.min(marg)),'margin_median':float(np.median(marg))}
 def main():
