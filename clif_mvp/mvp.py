@@ -13,6 +13,9 @@ ARMS = [
     "mutate_limit", "mutate_sort", "mutate_token", "mutate_scope",
 ]
 
+TARGET_IDS = {"users": 101, "reports": 211, "tokens": 307}
+POLICY_IDS = {"random": 401, "ucb": 503}
+
 TARGETS = {
     "users": {"hot": {"mutate_user_id": 0.55, "mutate_scope": 0.20}, "base": 0.015},
     "reports": {"hot": {"mutate_mode": 0.50, "mutate_page": 0.22}, "base": 0.015},
@@ -99,8 +102,8 @@ class UCBPolicy:
         self.q[action] += (reward - self.q[action]) / n
 
 def run_trial(target: str, policy_name: str, trial: int, budget: int, seed: int) -> TrialResult:
-    env_rng = random.Random(seed * 1009 + trial * 31 + hash(target) % 997)
-    policy_rng = random.Random(seed * 2027 + trial * 43 + hash(policy_name) % 991)
+    env_rng = random.Random(seed * 1009 + trial * 31 + TARGET_IDS[target])
+    policy_rng = random.Random(seed * 2027 + trial * 43 + POLICY_IDS[policy_name])
     env = ToyProgram(target, env_rng)
     policy = UCBPolicy() if policy_name == "ucb" else RandomPolicy(policy_rng)
 
