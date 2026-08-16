@@ -1,0 +1,32 @@
+name: CLIF MVP Online Learner
+
+on:
+  push:
+    branches: [clif-mvp]
+    paths:
+      - 'clif_mvp/**'
+      - '.github/workflows/clif-mvp.yml'
+  workflow_dispatch:
+
+jobs:
+  train-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Unit tests
+        run: |
+          cd clif_mvp
+          python -m unittest test_mvp.py -v
+      - name: Program-local online learning experiment
+        run: |
+          python clif_mvp/mvp.py --trials 80 --budget 120 --seed 1337 --out artifacts/clif_mvp_results.json
+      - name: Upload experiment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clif-mvp-results
+          path: artifacts/clif_mvp_results.json
+          if-no-files-found: error
