@@ -1,6 +1,9 @@
 import unittest
 
-from clif_mvp import http_mvp
+try:
+    from clif_mvp import http_mvp
+except ModuleNotFoundError:
+    import http_mvp
 
 
 class HTTPMVPTests(unittest.TestCase):
