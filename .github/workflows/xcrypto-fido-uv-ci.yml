@@ -1,0 +1,118 @@
+name: xcrypto FIDO UV verification
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  uv-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Clone current golang/crypto master
+        run: |
+          git clone --depth=1 https://github.com/golang/crypto.git /tmp/xcrypto
+          cd /tmp/xcrypto
+          echo "UPSTREAM_COMMIT=$(git rev-parse HEAD)"
+          git log -1 --oneline
+
+      - name: Static policy probe
+        run: |
+          cd /tmp/xcrypto
+          echo '=== verify-required / UV enforcement references under ssh/ ==='
+          grep -Rni --exclude-dir=testdata 'verify-required\|verifyRequired\|flagUserVerification' ssh/ || true
+          echo '=== UP enforcement references ==='
+          grep -Rni --exclude-dir=testdata 'flagUserPresence\|noTouchRequired' ssh/keys.go | head -50 || true
+
+      - name: Inject and run real upstream Go probe
+        shell: bash
+        run: |
+          cat > /tmp/xcrypto/ssh/zz_uv_probe_test.go <<'EOF'
+          package ssh
+
+          import (
+              "crypto/ecdsa"
+              "crypto/elliptic"
+              "crypto/rand"
+              "crypto/sha256"
+              "fmt"
+              "math/big"
+              "testing"
+          )
+
+          func uvProbeSignature(t *testing.T, key *ecdsa.PrivateKey, application string, data []byte, flags byte) *Signature {
+              t.Helper()
+              appHash := sha256.Sum256([]byte(application))
+              dataHash := sha256.Sum256(data)
+              const counter uint32 = 1
+              signed := Marshal(struct {
+                  ApplicationDigest []byte `ssh:"rest"`
+                  Flags             byte
+                  Counter           uint32
+                  MessageDigest     []byte `ssh:"rest"`
+              }{appHash[:], flags, counter, dataHash[:]})
+              digest := sha256.Sum256(signed)
+              r, s, err := ecdsa.Sign(rand.Reader, key, digest[:])
+              if err != nil { t.Fatal(err) }
+              return &Signature{
+                  Format: KeyAlgoSKECDSA256,
+                  Blob: Marshal(struct{ R, S *big.Int }{r, s}),
+                  Rest: Marshal(struct {
+                      Flags   byte
+                      Counter uint32
+                  }{flags, counter}),
+              }
+          }
+
+          func TestFidoUVProbe(t *testing.T) {
+              priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+              if err != nil { t.Fatal(err) }
+              const application = "ssh:"
+              data := []byte("xcrypto-fido-uv-probe")
+              raw := &skECDSAPublicKey{application: application, PublicKey: priv.PublicKey}
+
+              sigUV := uvProbeSignature(t, priv, application, data, 0x05)
+              if err := raw.Verify(data, sigUV); err != nil {
+                  t.Fatalf("CONTROL_FAIL UP=1 UV=1 rejected: %v", err)
+              }
+              fmt.Println("CONTROL_OK: UP=1 UV=1 accepted")
+
+              sigNoUV := uvProbeSignature(t, priv, application, data, 0x01)
+              rawErr := raw.Verify(data, sigNoUV)
+              fmt.Printf("RAW_VERIFY_UP1_UV0_ERR=%v\n", rawErr)
+
+              line := append([]byte("verify-required "), MarshalAuthorizedKey(raw)...)
+              parsed, _, options, _, err := ParseAuthorizedKey(line)
+              if err != nil { t.Fatalf("ParseAuthorizedKey: %v", err) }
+              fmt.Printf("PARSED_OPTIONS=%q\n", options)
+              if len(options) != 1 || options[0] != "verify-required" {
+                  t.Fatalf("verify-required option not preserved: %q", options)
+              }
+
+              parsedErr := parsed.Verify(data, sigNoUV)
+              fmt.Printf("PARSED_VERIFY_UP1_UV0_ERR=%v\n", parsedErr)
+
+              if rawErr == nil && parsedErr == nil {
+                  fmt.Println("OBSERVED: UP=1/UV=0 valid SK signature accepted before and after ParseAuthorizedKey on a verify-required line")
+                  fmt.Println("BOUNDARY: result proves library verification behavior; automatic authorized_keys option enforcement remains a separate contract question")
+                  return
+              }
+              t.Fatalf("behavior changed: rawErr=%v parsedErr=%v", rawErr, parsedErr)
+          }
+          EOF
+
+          cd /tmp/xcrypto
+          go test ./ssh -run '^TestFidoUVProbe$' -count=1 -v
+
+      - name: Built-in SK regression tests
+        run: |
+          cd /tmp/xcrypto
+          go test ./ssh -run '^TestSK(UserPresence|Keys|KeyWithoutUP)$' -count=1 -v
