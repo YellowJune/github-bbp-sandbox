@@ -1,0 +1,130 @@
+name: GRAFT full substrate-induction study
+on:
+  push:
+    branches: [pqs-substrate-induction-v0.1]
+    paths:
+      - 'experiments/graft_bundle.zip'
+      - '.github/workflows/graft-full.yml'
+  workflow_dispatch:
+
+jobs:
+  structural:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        start: [0, 5, 10, 15]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack study bundle
+        run: mkdir -p experiments/graft && unzip -q experiments/graft_bundle.zip -d experiments/graft
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy==2.1.3
+      - name: Structural discovery shard
+        working-directory: experiments/graft
+        run: PYTHONPATH=. python -m graft.experiments --start ${{ matrix.start }} --count 5 --out results/structural_${{ matrix.start }}.csv
+      - name: Ablation
+        if: matrix.start == 0
+        working-directory: experiments/graft
+        run: PYTHONPATH=. python -m graft.ablation --out results/ablation.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: structural-${{ matrix.start }}
+          path: experiments/graft/results/*.csv
+
+  finite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p experiments/graft && unzip -q experiments/graft_bundle.zip -d experiments/graft
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy==2.1.3
+      - working-directory: experiments/graft
+        run: PYTHONPATH=. python -m graft.run_finite --out results/finite.csv
+      - uses: actions/upload-artifact@v4
+        with: {name: finite, path: experiments/graft/results/finite.csv}
+
+  cross-substrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p experiments/graft && unzip -q experiments/graft_bundle.zip -d experiments/graft
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy==2.1.3
+      - name: Independent C discovery vs Python discovery
+        working-directory: experiments/graft
+        run: |
+          gcc -O3 -std=c11 csrc/cross_discover.c -lm -o cross_discover
+          PYTHONPATH=. python -m graft.cross_substrate --seeds 10 --binary ./cross_discover --out results/cross_substrate.csv
+      - uses: actions/upload-artifact@v4
+        with: {name: cross-substrate, path: experiments/graft/results/cross_substrate.csv}
+
+  gp:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: {start: [0, 5]}
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p experiments/graft && unzip -q experiments/graft_bundle.zip -d experiments/graft
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy==2.1.3
+      - working-directory: experiments/graft
+        run: PYTHONPATH=. python -m graft.gp_baseline --start ${{ matrix.start }} --count 5 --out results/gp_${{ matrix.start }}.csv
+      - uses: actions/upload-artifact@v4
+        with: {name: gp-${{ matrix.start }}, path: experiments/graft/results/gp_${{ matrix.start }}.csv}
+
+  neural:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: {task: [parity, addition, dyck1, dyck2]}
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p experiments/graft && unzip -q experiments/graft_bundle.zip -d experiments/graft
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy==2.1.3 pandas==2.2.3 torch==2.7.1
+      - working-directory: experiments/graft
+        run: PYTHONPATH=. python -m graft.neural_baselines --start 0 --count 10 --steps 800 --tasks ${{ matrix.task }} --kinds GRU,LSTM,Transformer --no-latency --out results/neural_${{ matrix.task }}.csv
+      - uses: actions/upload-artifact@v4
+        with: {name: neural-${{ matrix.task }}, path: experiments/graft/results/neural_${{ matrix.task }}.csv}
+
+  latency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p experiments/graft && unzip -q experiments/graft_bundle.zip -d experiments/graft
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy==2.1.3 pandas==2.2.3 torch==2.7.1
+      - working-directory: experiments/graft
+        run: |
+          gcc -O3 -march=native -std=c11 csrc/executor_bench.c -o executor_bench
+          PYTHONPATH=. python -m graft.latency_compare --out results/latency.csv
+      - uses: actions/upload-artifact@v4
+        with: {name: latency, path: experiments/graft/results/latency.csv}
+
+  aggregate:
+    runs-on: ubuntu-latest
+    needs: [structural, finite, cross-substrate, gp, neural, latency]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p experiments/graft && unzip -q experiments/graft_bundle.zip -d experiments/graft
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy==2.1.3 pandas==2.2.3
+      - uses: actions/download-artifact@v4
+        with: {path: downloads}
+      - working-directory: experiments/graft
+        env:
+          INPUT_ROOT: ../../downloads
+          OUTPUT_DIR: ../../aggregate
+        run: PYTHONPATH=. python -m graft.aggregate
+      - uses: actions/upload-artifact@v4
+        with: {name: graft-aggregate, path: aggregate}
