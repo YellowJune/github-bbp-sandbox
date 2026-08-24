@@ -5,6 +5,11 @@ on:
     paths:
       - 'experiments/graft_bundle.zip'
       - '.github/workflows/graft-full.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'experiments/graft_bundle.zip'
+      - '.github/workflows/graft-full.yml'
   workflow_dispatch:
 
 jobs:
