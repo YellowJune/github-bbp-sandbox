@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-import argparse, csv, glob, json, math, os, re, shutil, subprocess
+import argparse, csv, glob, json, os, re, shutil, subprocess
 from pathlib import Path
 
 import numpy as np
-from ase import Atoms
 from ase.io import read as ase_read
 
 MASS = {"Ba":137.327,"Cu":63.546,"Hg":200.592,"O":15.999,"N":14.007,"La":138.90547}
@@ -35,13 +34,12 @@ def supercell_2x1x1():
 def variants():
     syms,frac,cell,tags=supercell_2x1x1()
     out={"parent":(list(syms),frac.copy(),cell.copy())}
-    # Charge-compensated O2- -> N3- paired with Ba2+ -> La3+.
-    # One substitution pair in a 2x1x1 cell: mechanistic stress test, not claimed stable a priori.
+    # Formal charge compensation: O2- -> N3- paired with Ba2+ -> La3+.
+    # This is a mechanistic stress test, not a prior claim of synthesizability.
     for name, oxygen_j in [("LaN_apical",4),("LaN_planar",6)]:
         ss=list(syms)
-        la_idx=tags.index((0,0))
-        n_idx=tags.index((0,oxygen_j))
-        ss[la_idx]="La"; ss[n_idx]="N"
+        ss[tags.index((0,0))]="La"
+        ss[tags.index((0,oxygen_j))]="N"
         out[name]=(ss,frac.copy(),cell.copy())
     return out
 
@@ -55,9 +53,9 @@ def pseudo_map(pseudo_dir, sssp_json):
             fn=meta[e].get("filename") or meta[e].get("pseudo")
         if fn and os.path.exists(os.path.join(pseudo_dir,fn)):
             ans[e]=fn; continue
-        pats=[f"{e}.*UPF",f"{e}*upf",f"{e}*UPF"]
         cand=[]
-        for p in pats: cand += glob.glob(os.path.join(pseudo_dir,p))
+        for p in [f"{e}.*UPF",f"{e}.*upf",f"{e}_*UPF",f"{e}_*upf"]:
+            cand += glob.glob(os.path.join(pseudo_dir,p))
         cand=sorted(set(cand))
         if not cand:
             raise FileNotFoundError(f"No pseudopotential found for {e} in {pseudo_dir}")
@@ -95,8 +93,7 @@ def run_cmd(cmd,stdin_path,stdout_path):
 
 
 def parse_fermi(text):
-    pats=[r"the Fermi energy is\s+([\-0-9.Ee+]+)",r"highest occupied level \(ev\):\s+([\-0-9.Ee+]+)"]
-    for pat in pats:
+    for pat in [r"the Fermi energy is\s+([\-0-9.Ee+]+)",r"highest occupied level \(ev\):\s+([\-0-9.Ee+]+)"]:
         m=list(re.finditer(pat,text,re.I))
         if m: return float(m[-1].group(1))
     return float("nan")
@@ -129,9 +126,7 @@ def integrate_overlap(pdos_prefix,ef):
     if EN is not None and npd is not None and len(EN)==len(E) and np.max(np.abs(EN-E))<1e-6: ligand += npd
     mask=(E>=ef-0.5)&(E<=ef+0.5)
     trap=getattr(np,"trapezoid",np.trapz)
-    cuint=float(trap(cu[mask],E[mask]))
-    oint=float(trap(op[mask],E[mask]))
-    nint=0.0
+    cuint=float(trap(cu[mask],E[mask])); oint=float(trap(op[mask],E[mask])); nint=0.0
     if EN is not None and npd is not None:
         mn=(EN>=ef-0.5)&(EN<=ef+0.5); nint=float(trap(npd[mn],EN[mn]))
     lint=float(trap(ligand[mask],E[mask]))
@@ -140,14 +135,12 @@ def integrate_overlap(pdos_prefix,ef):
 
 
 def nearest_metrics(atoms):
-    syms=atoms.get_chemical_symbols(); dists=atoms.get_all_distances(mic=True)
-    vals=[]
+    syms=atoms.get_chemical_symbols(); dists=atoms.get_all_distances(mic=True); vals=[]
     for i,s in enumerate(syms):
         if s!="Cu": continue
         for j,t in enumerate(syms):
             if t in ("O","N") and i!=j: vals.append((dists[i,j],t))
-    vals=sorted(vals)
-    near=[x for x in vals if x[0]<3.0]
+    vals=sorted(vals); near=[x for x in vals if x[0]<3.0]
     return {
         "min_Cu_ligand_A": float(near[0][0]) if near else float("nan"),
         "mean_4short_Cu_ligand_A": float(np.mean([x[0] for x in near[:8]])) if near else float("nan"),
@@ -158,7 +151,9 @@ def nearest_metrics(atoms):
 
 def main():
     out=Path(args.output_dir); out.mkdir(parents=True,exist_ok=True)
-    scratch=out/"scratch"; scratch.mkdir(exist_ok=True)
+    scratch=Path(args.scratch_dir)
+    if scratch.exists(): shutil.rmtree(scratch)
+    scratch.mkdir(parents=True,exist_ok=True)
     pmap=pseudo_map(args.pseudo_dir,args.sssp_json)
     (out/"pseudopotentials.json").write_text(json.dumps(pmap,indent=2))
     rows=[]
@@ -168,19 +163,16 @@ def main():
         prefix=f"csc_{name}"
         rel_in=vdir/"relax.in"; rel_out=vdir/"relax.out"
         write_pw(rel_in,prefix,syms,frac,cell,pmap,odir,"relax",(3,6,4))
-        rc=run_cmd(args.mpi_cmd.split()+["pw.x","-in",str(rel_in)],rel_in,rel_out) if False else None
-        # Use shell-style MPI prefix robustly: executable + stdin, without duplicate -in.
         cmd=args.mpi_cmd.split()+["pw.x"] if args.mpi_cmd.strip() else ["pw.x"]
-        rc=run_cmd(cmd,rel_in,rel_out)
-        rec={"name":name,"relax_rc":rc}
+        rc=run_cmd(cmd,rel_in,rel_out); rec={"name":name,"relax_rc":rc}
         if rc!=0:
+            rec["relax_tail"]="\n".join(rel_out.read_text(errors="ignore").splitlines()[-12:])
             rows.append(rec); print("RELAX_FAIL",name,rc); continue
         try:
             at=ase_read(str(rel_out),format="espresso-out",index=-1)
         except Exception as exc:
             rec["parse_error"]=repr(exc); rows.append(rec); continue
         rec.update(nearest_metrics(at))
-        # Fixed-cell SCF on relaxed ions, denser grid.
         sy2=at.get_chemical_symbols(); cell2=np.array(at.cell.array,float); frac2=np.array(at.get_scaled_positions(wrap=True),float)
         scf_in=vdir/"scf.in"; scf_out=vdir/"scf.out"
         write_pw(scf_in,prefix,sy2,frac2,cell2,pmap,odir,"scf",(4,8,4))
@@ -188,31 +180,33 @@ def main():
         txt=scf_out.read_text(errors="ignore") if scf_out.exists() else ""
         rec["fermi_eV"]=parse_fermi(txt); rec["total_energy_eV"]=parse_energy(txt)
         if rc2==0:
-            proj_in=vdir/"projwfc.in"; proj_out=vdir/"projwfc.out"; filpdos=os.path.abspath(vdir/"pdos")
-            proj_in.write_text("&PROJWFC\n prefix='%s',\n outdir='%s',\n filpdos='%s',\n DeltaE=0.05, degauss=0.02, ngauss=0,\n/\n"%(prefix,os.path.abspath(odir),filpdos))
+            proj_in=vdir/"projwfc.in"; proj_out=vdir/"projwfc.out"; filpdos=os.path.join(str(odir),"pdos")
+            proj_in.write_text("&PROJWFC\n prefix='%s',\n outdir='%s',\n filpdos='%s',\n DeltaE=0.05, degauss=0.02, ngauss=0,\n/\n"%(prefix,os.path.abspath(odir),os.path.abspath(filpdos)))
             pcmd=args.mpi_cmd.split()+["projwfc.x"] if args.mpi_cmd.strip() else ["projwfc.x"]
             rc3=run_cmd(pcmd,proj_in,proj_out); rec["projwfc_rc"]=rc3
-            if rc3==0: rec.update(integrate_overlap(filpdos,rec["fermi_eV"]))
-        rows.append(rec)
-        print("DONE",json.dumps(rec,default=str))
-    keys=sorted({k for r in rows for k in r})
-    with open(out/"qe_summary.csv","w",newline="") as f:
-        w=csv.DictWriter(f,fieldnames=keys); w.writeheader(); w.writerows(rows)
+            if rc3==0:
+                rec.update(integrate_overlap(filpdos,rec["fermi_eV"]))
+                pdos_out=vdir/"pdos_files"; pdos_out.mkdir(exist_ok=True)
+                for fn in glob.glob(filpdos+"*"):
+                    if os.path.isfile(fn): shutil.copy2(fn,pdos_out/os.path.basename(fn))
+        rows.append(rec); print("DONE",json.dumps(rec,default=str))
     parent=next((r for r in rows if r.get("name")=="parent"),{})
     for r in rows:
         if r.get("name")!="parent":
             for k in ["hybrid_overlap","cu_d_window","ligand_p_window","min_Cu_ligand_A"]:
                 if k in r and k in parent and isinstance(r[k],(int,float)) and isinstance(parent[k],(int,float)) and np.isfinite(r[k]) and np.isfinite(parent[k]):
                     r["delta_"+k]=r[k]-parent[k]
-    (out/"summary.json").write_text(json.dumps({"constraint":{"H":False,"pressure_atm":0},"method":"PBE spin-polarized QE; same-pipeline parent/interventions; PDOS overlap is a proxy, not Tc","rows":rows},indent=2,default=float))
-    print("SUMMARY")
-    print(json.dumps(rows,indent=2,default=float))
+    keys=sorted({k for r in rows for k in r})
+    with open(out/"qe_summary.csv","w",newline="") as f:
+        w=csv.DictWriter(f,fieldnames=keys); w.writeheader(); w.writerows(rows)
+    (out/"summary.json").write_text(json.dumps({"constraint":{"H":False,"pressure_atm":0},"method":"spin-polarized PBE QE 6.7, SSSP 1.2.1 efficiency; same pipeline; PDOS overlap is a hybridization proxy, not Tc","rows":rows},indent=2,default=float))
+    print("SUMMARY"); print(json.dumps(rows,indent=2,default=float))
 
 if __name__=="__main__":
     ap=argparse.ArgumentParser()
     ap.add_argument("--pseudo-dir",required=True)
     ap.add_argument("--sssp-json",default="")
     ap.add_argument("--output-dir",default="artifacts/cipher_sc_qe_oxynitride")
+    ap.add_argument("--scratch-dir",default="/tmp/cq")
     ap.add_argument("--mpi-cmd",default="mpirun --oversubscribe -np 4")
-    args=ap.parse_args()
-    main()
+    args=ap.parse_args(); main()
