@@ -34,15 +34,18 @@ jobs:
           wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/sssp.tar.gz
           wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O pseudo/SSSP_1.2.1_PBE_efficiency.json
           echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/sssp.tar.gz' | md5sum -c -
-          tar -xzf /tmp/sssp.tar.gz -C pseudo/SSSP_1.2.1_PBE_efficiency
+          rm -rf /tmp/pp
+          mkdir -p /tmp/pp
+          tar -xzf /tmp/sssp.tar.gz -C /tmp/pp
           test -s pseudo/SSSP_1.2.1_PBE_efficiency.json
-          ls pseudo/SSSP_1.2.1_PBE_efficiency | head
+          ls /tmp/pp | head
 
       - name: Run same-pipeline Hg1201 parent and N/La interventions
         run: |
           python experiments/qe_oxynitride_scan.py \
-            --pseudo-dir pseudo/SSSP_1.2.1_PBE_efficiency \
+            --pseudo-dir /tmp/pp \
             --sssp-json pseudo/SSSP_1.2.1_PBE_efficiency.json \
+            --scratch-dir /tmp/cq \
             --output-dir artifacts/cipher_sc_qe_oxynitride
 
       - name: Print summary
