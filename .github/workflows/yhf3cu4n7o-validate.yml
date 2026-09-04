@@ -1,0 +1,44 @@
+name: YHf3Cu4N7O isolated structural validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'yhf3cu4n7o/**'
+      - '.github/workflows/yhf3cu4n7o-validate.yml'
+
+concurrency:
+  group: yhf3cu4n7o-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relax:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        name: [CaCuO2, Cu3N, YHf3Cu4N7O]
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural model
+        run: |
+          pip install -q chgnet pymatgen ase
+      - name: Relax at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python yhf3cu4n7o/chgnet_validate.py --name '${{ matrix.name }}' --out artifacts/${{ matrix.name }}
+      - name: Print
+        if: always()
+        run: cat artifacts/${{ matrix.name }}/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yhf3-${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
+          if-no-files-found: warn
