@@ -62,14 +62,58 @@ def metrics(at):
       'mean_Cu_lig_coord_lt2p35':float(np.mean(coord)),
       'min_anion_anion_A':float(min(an))}
 
-def run(ordering,p,out,model):
-    s,_=build(ordering); at=AseAtomsAdaptor.get_atoms(s); v0=at.get_volume(); m0=metrics(at)
-    at.calc=CHGNetCalculator(model=model)
+def relax_atoms(s,p,model,logfile,fmax=.050,steps=420):
+    at=AseAtomsAdaptor.get_atoms(s); at.calc=CHGNetCalculator(model=model)
     filt=FrechetCellFilter(at,scalar_pressure=p*GPA_TO_EV_A3)
-    FIRE(filt,logfile=str(out/f'{ordering}_{p:.5f}GPa.log')).run(fmax=.050,steps=420)
+    FIRE(filt,logfile=str(logfile)).run(fmax=fmax,steps=steps)
+    return at
+
+def enthalpy_eV_atom(at,p):
+    return float(at.get_potential_energy()/len(at) + p*GPA_TO_EV_A3*at.get_volume()/len(at))
+
+def binary_structure(A,B,prototype,a):
+    if prototype=='rocksalt':
+        return Structure.from_spacegroup('Fm-3m',Lattice.cubic(a),[A,B],[[0,0,0],[.5,.5,.5]])
+    if prototype=='zincblende':
+        return Structure.from_spacegroup('F-43m',Lattice.cubic(a),[A,B],[[0,0,0],[.25,.25,.25]])
+    raise ValueError(prototype)
+
+def binary_reference(p,out,model):
+    # Conservative necessary-decomposition gate, not a full hull.
+    specs={
+      'ScN':[('rocksalt',4.50)],
+      'MgO':[('rocksalt',4.21)],
+      'CuO':[('rocksalt',4.30),('zincblende',4.30)],
+      'CuN':[('rocksalt',4.05),('zincblende',4.05)],
+    }
+    best={}; details={}
+    for name,protos in specs.items():
+        A=name[:-1] if name.endswith(('O','N')) else name
+        # explicit parse for the four binary names
+        AB={'ScN':('Sc','N'),'MgO':('Mg','O'),'CuO':('Cu','O'),'CuN':('Cu','N')}[name]
+        vals=[]
+        for proto,a in protos:
+            s=binary_structure(*AB,proto,a)
+            at=relax_atoms(s,p,model,out/f'binary_{name}_{proto}_{p:.5f}.log',fmax=.045,steps=260)
+            h=enthalpy_eV_atom(at,p)
+            vals.append({'prototype':proto,'enthalpy_eV_atom':h,'volume_A3_atom':float(at.get_volume()/len(at)),
+                         'max_force_eV_A':float(np.linalg.norm(at.get_forces(),axis=1).max())})
+        details[name]=vals; best[name]=min(x['enthalpy_eV_atom'] for x in vals)
+    # 3 ScN + 3 MgO + 5 CuO + 1 CuN; each is AB -> 24 product atoms total.
+    mix=(6*best['ScN']+6*best['MgO']+10*best['CuO']+2*best['CuN'])/24
+    return mix,best,details
+
+def run(ordering,p,out,model):
+    s,_=build(ordering); at0=AseAtomsAdaptor.get_atoms(s); v0=at0.get_volume(); m0=metrics(at0)
+    at=relax_atoms(s,p,model,out/f'{ordering}_{p:.5f}GPa.log')
     m=metrics(at); f=np.linalg.norm(at.get_forces(),axis=1); ang=at.cell.angles()
+    h=enthalpy_eV_atom(at,p)
+    mix,best_bin,bin_details=binary_reference(p,out,model)
     rec={'ordering':ordering,'pressure_GPa_target':p,'pressure_atm_target':p/ATM_TO_GPA,
          'formula':at.get_chemical_formula(),'energy_eV_atom':float(at.get_potential_energy()/len(at)),
+         'enthalpy_eV_atom':h,'binary_mix_enthalpy_eV_atom':mix,
+         'deltaH_vs_binary_mix_eV_atom':float(h-mix),
+         'binary_reference_best_eV_atom':best_bin,'binary_reference_details':bin_details,
          'max_force_eV_A':float(f.max()),'volume_ratio':float(at.get_volume()/v0),
          'cell_lengths_A':[float(x) for x in at.cell.lengths()],
          'cell_angles_deg':[float(x) for x in ang]}
@@ -77,8 +121,9 @@ def run(ordering,p,out,model):
     rec['gross_structure_pass']=bool(rec['max_force_eV_A']<.10 and .70<rec['volume_ratio']<1.30 and
       m['min_first4_CuLig_A']>1.55 and m['max_first4_CuLig_A']<2.35 and
       m['mean_Cu_lig_coord_lt2p35']>=3.8 and m['min_anion_anion_A']>1.20 and min(ang)>75 and max(ang)<105)
-    # Pre-registered Stage 31/38 target. Geometry gate only, not Tc.
     rec['strict_geometry_target_pass']=bool(m['mean_first4_CuLig_A']<=1.89)
+    # Because CuO/CuN prototype set is intentionally incomplete, this is only a necessary gate.
+    rec['conservative_binary_mix_gate']=bool(rec['deltaH_vs_binary_mix_eV_atom']<=0.10)
     AseAtomsAdaptor.get_structure(at).to(filename=str(out/f'{ordering}_{p:.5f}GPa_relaxed.cif'))
     return rec
 
