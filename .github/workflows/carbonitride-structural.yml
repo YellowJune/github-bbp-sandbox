@@ -1,0 +1,141 @@
+name: Cu carbonitride structural competition
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'carbonitride/**'
+      - '.github/workflows/carbonitride-structural.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: carbonitride-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relax:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [TiNb5Cu6C6N6, Nb6Cu6C7N5, Ti3Nb3Cu6C4N8]
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CHGNet stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax ${{ matrix.candidate }} at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python carbonitride/structural.py --name '${{ matrix.candidate }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/${{ matrix.candidate }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: carbonitride-${{ matrix.candidate }}
+          path: artifacts/${{ matrix.candidate }}
+          if-no-files-found: warn
+
+  select:
+    needs: relax
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      advance: ${{ steps.pick.outputs.advance }}
+      winner: ${{ steps.pick.outputs.winner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: carbonitride-*
+          path: artifacts
+          merge-multiple: false
+      - name: Normalize artifact directories
+        shell: bash
+        run: |
+          mkdir -p /tmp/carbon
+          for d in artifacts/carbonitride-*; do
+            [ -d "$d" ] || continue
+            n="${d#artifacts/carbonitride-}"
+            mkdir -p "/tmp/carbon/$n"
+            cp -a "$d"/. "/tmp/carbon/$n/"
+          done
+          rm -rf artifacts
+          mkdir -p artifacts
+          cp -a /tmp/carbon/. artifacts/
+      - name: Select compact relaxed winner
+        run: python carbonitride/select.py
+      - name: Export winner
+        id: pick
+        shell: bash
+        run: |
+          echo "advance=$(cat artifacts/select/ADVANCE)" >> "$GITHUB_OUTPUT"
+          echo "winner=$(cat artifacts/select/WINNER)" >> "$GITHUB_OUTPUT"
+          cat artifacts/select/selection.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: carbonitride-selection
+          path: artifacts/select
+
+  qe:
+    needs: select
+    if: needs.select.outputs.advance == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        pressure: [0, 400]
+    runs-on: ubuntu-latest
+    timeout-minutes: 230
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: carbonitride-selection
+          path: artifacts/select
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install QE 7.5 and parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP 1.2.1 PBE efficiency
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O /tmp/s.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/s.tar.gz' | md5sum -c -
+          mkdir -p /tmp/pp /tmp/carbonq
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: Run PBE and PBE+U on relaxed winner
+        env:
+          OMP_NUM_THREADS: '2'
+          WINNER: ${{ needs.select.outputs.winner }}
+        shell: bash
+        run: |
+          if [ '${{ matrix.pressure }}' = '0' ]; then
+            CIF='artifacts/select/relaxed_0.00000000GPa.cif'
+          else
+            CIF='artifacts/select/relaxed_0.04053000GPa.cif'
+          fi
+          python carbonitride/qe_relaxed.py --cif "$CIF" --pressure-atm '${{ matrix.pressure }}' --winner "$WINNER" \
+            --ppdir /tmp/pp --meta /tmp/s.json --scratch '/tmp/carbonq/${{ matrix.pressure }}' \
+            --out 'artifacts/qe/${{ matrix.pressure }}atm'
+      - name: Print QE result
+        if: always()
+        run: cat 'artifacts/qe/${{ matrix.pressure }}atm/qe_electronic.csv' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: carbonitride-qe-${{ matrix.pressure }}atm
+          path: artifacts/qe/${{ matrix.pressure }}atm
+          if-no-files-found: warn
