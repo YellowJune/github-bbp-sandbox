@@ -1,0 +1,47 @@
+name: mIII RbCsK LiAl orthogonal chemical pressure
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'miiilial/**'
+      - '.github/workflows/miii-rbcsk-lial.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: miii-lial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Download CC0 optimized AgF2 intergrowth structures
+        shell: bash
+        run: |
+          mkdir -p /tmp/agf2parent
+          curl -fL --retry 3 'https://danebadawcze.uw.edu.pl/api/access/dataset/:persistentId/?persistentId=doi:10.58132/ILDT0U' -o /tmp/agf2parent/dataset.zip
+          unzip -q /tmp/agf2parent/dataset.zip -d /tmp/agf2parent/data
+          find /tmp/agf2parent/data -type f | sort
+      - name: Locate mIII parent and relax parent/LiAl at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python miiilial/run.py
+      - name: Print full result
+        if: always()
+        run: |
+          cat artifacts/miii/parent_selection.json || true
+          cat artifacts/miii/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: miii-rbcsk-lial
+          path: artifacts/miii
+          if-no-files-found: warn
