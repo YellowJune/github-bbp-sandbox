@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'experiments/cipher_sc_lowp_search.py'
+      - 'experiments/alignn_lowp_audit.py'
       - '.github/workflows/cipher-sc-lowp.yml'
   workflow_dispatch:
 
@@ -22,11 +23,15 @@ jobs:
       - name: Install simulation stack
         run: |
           python -m pip install --upgrade pip
-          pip install "numpy<2.3" pandas scipy scikit-learn pymatgen ase "chgnet==0.3.8"
+          pip install "numpy<2.3" pandas scipy scikit-learn pymatgen ase "chgnet==0.3.8" "alignn==2026.8.11"
 
-      - name: Run H-free <=400 atm search and validation
+      - name: Run H-free <=400 atm CIPHER and CHGNet validation
         run: |
           python experiments/cipher_sc_lowp_search.py
+
+      - name: Run independent ALIGNN structure/Tc audit
+        run: |
+          python experiments/alignn_lowp_audit.py
 
       - name: Upload results
         if: always()
