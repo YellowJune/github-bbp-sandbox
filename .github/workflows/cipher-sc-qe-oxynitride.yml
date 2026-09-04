@@ -34,16 +34,22 @@ jobs:
           wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/sssp.tar.gz
           wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O pseudo/SSSP_1.2.1_PBE_efficiency.json
           echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/sssp.tar.gz' | md5sum -c -
-          rm -rf /tmp/pp
-          mkdir -p /tmp/pp
+          rm -rf /tmp/pp /tmp/pps
+          mkdir -p /tmp/pp /tmp/pps
           tar -xzf /tmp/sssp.tar.gz -C /tmp/pp
           test -s pseudo/SSSP_1.2.1_PBE_efficiency.json
-          ls /tmp/pp | head
+          cp /tmp/pp/Ba.pbe-spn-kjpaw_psl.1.0.0.UPF /tmp/pps/Ba.UPF
+          cp /tmp/pp/Cu.paw.z_11.ld1.psl.v1.0.0-low.upf /tmp/pps/Cu.UPF
+          cp /tmp/pp/Hg_ONCV_PBE-1.0.oncvpsp.upf /tmp/pps/Hg.UPF
+          cp /tmp/pp/O.pbe-n-kjpaw_psl.0.1.UPF /tmp/pps/O.UPF
+          cp /tmp/pp/N.pbe-n-radius_5.UPF /tmp/pps/N.UPF
+          cp /tmp/pp/La.paw.z_11.atompaw.wentzcovitch.v1.2.upf /tmp/pps/La.UPF
+          ls -l /tmp/pps
 
       - name: Run same-pipeline Hg1201 parent and N/La interventions
         run: |
           python experiments/qe_oxynitride_scan.py \
-            --pseudo-dir /tmp/pp \
+            --pseudo-dir /tmp/pps \
             --sssp-json pseudo/SSSP_1.2.1_PBE_efficiency.json \
             --scratch-dir /tmp/cq \
             --output-dir artifacts/cipher_sc_qe_oxynitride
