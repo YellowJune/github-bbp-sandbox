@@ -1,0 +1,31 @@
+name: Ba11KCu6Tl6N6O18 low-pressure structural screen
+on:
+  pull_request:
+    paths:
+      - 'ba11k_tln/**'
+      - '.github/workflows/ba11k-tln-chgnet.yml'
+  workflow_dispatch:
+
+jobs:
+  relax:
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [parent_hg, full_tln, k_doped]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet chgnet ase pymatgen
+      - run: python ba11k_tln/chgnet_validate.py --name '${{ matrix.name }}' --scale 1.0 --out 'artifacts/${{ matrix.name }}'
+      - if: always()
+        run: cat 'artifacts/${{ matrix.name }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ba11k-${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
+          if-no-files-found: warn
