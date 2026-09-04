@@ -1,0 +1,30 @@
+name: NaMg5Cu6O12 multi-start low-pressure validation
+on:
+  pull_request:
+    paths:
+      - 'namg5cu6o12/**'
+      - '.github/workflows/namg5cu6o12-validate.yml'
+  workflow_dispatch:
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [Mg6Cu6O12, NaMg5Cu6O12]
+        a0: ['3.65','3.75','3.85']
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet chgnet ase pymatgen
+      - run: python namg5cu6o12/chgnet_validate.py --name ${{ matrix.name }} --a0 ${{ matrix.a0 }} --out artifacts/${{ matrix.name }}_${{ matrix.a0 }}
+      - if: always()
+        run: cat artifacts/${{ matrix.name }}_${{ matrix.a0 }}/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: namg-${{ matrix.name }}-${{ matrix.a0 }}
+          path: artifacts/${{ matrix.name }}_${{ matrix.a0 }}
