@@ -14,7 +14,9 @@ GPA_TO_EV_A3=1/160.21766208
 STARTS=[('s1',3.40,2.45),('s2',3.55,2.65),('s3',3.70,2.85),('s4',3.85,3.05)]
 
 CAND={
- 'TiNb5Cu6C6N6':{'A':['Ti','Nb','Nb','Nb','Nb','Nb'],'C':{'x00','y00','y10','x20','y20','x01'}},
+ # TiNb5 ordering updated after exhaustive 5544-state pairing + screened-Coulomb search:
+ # Ti spacer index 1 and C bonds x20,x01,y01,y11,x21,y21.
+ 'TiNb5Cu6C6N6':{'A':['Nb','Ti','Nb','Nb','Nb','Nb'],'C':{'x20','x01','y01','y11','x21','y21'}},
  'Nb6Cu6C7N5':{'A':['Nb']*6,'C':{'x00','x10','x01','y01','x11','y11','y21'}},
  'Ti3Nb3Cu6C4N8':{'A':['Ti','Ti','Ti','Nb','Nb','Nb'],'C':{'x00','y00','y10','x01'}},
 }
