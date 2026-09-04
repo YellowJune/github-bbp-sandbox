@@ -1,0 +1,59 @@
+name: CIPHER SC QE oxynitride falsification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'experiments/qe_oxynitride_scan.py'
+      - '.github/workflows/cipher-sc-qe-oxynitride.yml'
+  workflow_dispatch:
+
+jobs:
+  qe_scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Quantum ESPRESSO and analysis stack
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y quantum-espresso openmpi-bin wget
+          python -m pip install --upgrade pip
+          pip install 'numpy<2.3' ase pandas
+          pw.x --version || true
+          projwfc.x --version || true
+
+      - name: Download SSSP 1.2.1 PBE efficiency pseudopotentials
+        run: |
+          mkdir -p pseudo/SSSP_1.2.1_PBE_efficiency
+          wget -q 'https://archive.materialscloud.org/record/file?record_id=1729&filename=SSSP_1.2.1_PBE_efficiency.tar.gz' -O /tmp/sssp.tar.gz
+          wget -q 'https://archive.materialscloud.org/record/file?record_id=1729&filename=SSSP_1.2.1_PBE_efficiency.json' -O pseudo/SSSP_1.2.1_PBE_efficiency.json
+          tar -xzf /tmp/sssp.tar.gz -C pseudo/SSSP_1.2.1_PBE_efficiency
+          test -s pseudo/SSSP_1.2.1_PBE_efficiency.json
+          ls pseudo/SSSP_1.2.1_PBE_efficiency | head
+
+      - name: Run same-pipeline Hg1201 parent and N/La interventions
+        run: |
+          python experiments/qe_oxynitride_scan.py \
+            --pseudo-dir pseudo/SSSP_1.2.1_PBE_efficiency \
+            --sssp-json pseudo/SSSP_1.2.1_PBE_efficiency.json \
+            --output-dir artifacts/cipher_sc_qe_oxynitride
+
+      - name: Print summary
+        if: always()
+        run: |
+          cat artifacts/cipher_sc_qe_oxynitride/qe_summary.csv || true
+          cat artifacts/cipher_sc_qe_oxynitride/summary.json || true
+
+      - name: Upload QE results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-sc-qe-oxynitride
+          path: artifacts/cipher_sc_qe_oxynitride
+          if-no-files-found: warn
