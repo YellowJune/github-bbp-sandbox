@@ -1,0 +1,30 @@
+name: Ag1223 isolated structural validation
+on:
+  pull_request:
+    paths:
+      - 'ag1223/**'
+      - '.github/workflows/ag1223-validate.yml'
+  workflow_dispatch:
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [Hg1223, Ag1223]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install stack
+        run: pip install --quiet chgnet ase pymatgen
+      - name: Relax 0 and 400 atm
+        run: python ag1223/chgnet_validate.py --name ${{ matrix.name }} --out artifacts/${{ matrix.name }}
+      - name: Print result
+        run: cat artifacts/${{ matrix.name }}/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ag1223-${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
