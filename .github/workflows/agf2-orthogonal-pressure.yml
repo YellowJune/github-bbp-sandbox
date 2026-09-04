@@ -1,0 +1,56 @@
+name: AgF2 orthogonal chemical pressure screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agf2ortho/**'
+      - '.github/workflows/agf2-orthogonal-pressure.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: agf2-ortho-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  structural:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [parent, Be2, LiAl, LiGa, LiSc]
+        pressure: [0, 400]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Download CC0 optimized Cs2K parent dataset
+        shell: bash
+        run: |
+          mkdir -p /tmp/agf2parent
+          curl -fL --retry 3 'https://danebadawcze.uw.edu.pl/api/access/dataset/:persistentId/?persistentId=doi:10.58132/ILDT0U' -o /tmp/agf2parent/dataset.zip
+          unzip -q /tmp/agf2parent/dataset.zip -d /tmp/agf2parent/data
+          find /tmp/agf2parent/data -type f -maxdepth 3 | sort
+          test -n "$(find /tmp/agf2parent/data -name 'Cs2K.vasp' -print -quit)"
+      - name: Relax generated variant
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python agf2ortho/relax_variant.py \
+            --root /tmp/agf2parent/data \
+            --variant '${{ matrix.variant }}' \
+            --pressure-atm '${{ matrix.pressure }}' \
+            --out 'artifacts/${{ matrix.variant }}/${{ matrix.pressure }}atm'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/${{ matrix.variant }}/${{ matrix.pressure }}atm/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agf2-ortho-${{ matrix.variant }}-${{ matrix.pressure }}atm
+          path: artifacts/${{ matrix.variant }}/${{ matrix.pressure }}atm
+          if-no-files-found: warn
