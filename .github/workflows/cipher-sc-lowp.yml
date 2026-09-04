@@ -1,0 +1,37 @@
+name: CIPHER SC low-pressure hydrogen-free validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'experiments/cipher_sc_lowp_search.py'
+      - '.github/workflows/cipher-sc-lowp.yml'
+  workflow_dispatch:
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install simulation stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install "numpy<2.3" pandas scipy scikit-learn pymatgen ase "chgnet==0.3.8"
+
+      - name: Run H-free <=400 atm search and validation
+        run: |
+          python experiments/cipher_sc_lowp_search.py
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipher-sc-lowp-results
+          path: artifacts/cipher_sc_lowp
+          if-no-files-found: warn
