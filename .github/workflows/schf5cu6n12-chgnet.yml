@@ -1,0 +1,33 @@
+name: ScHf5Cu6N12 low-pressure structural validation
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'schf5cu6n12/**'
+      - '.github/workflows/schf5cu6n12-chgnet.yml'
+  workflow_dispatch:
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        name: [Hf6Cu6N12, ScHf5Cu6N12, YHf5Cu6N12]
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet chgnet ase pymatgen
+      - name: Relax 0 and 400 atm
+        run: python schf5cu6n12/chgnet_validate.py --name '${{ matrix.name }}' --a0 3.80 --out 'artifacts/${{ matrix.name }}'
+      - if: always()
+        run: cat 'artifacts/${{ matrix.name }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: schf-${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
+          if-no-files-found: warn
