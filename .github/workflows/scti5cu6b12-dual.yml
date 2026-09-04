@@ -1,0 +1,147 @@
+name: ScTi5Cu6B12 dual-world-model validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'boride/**'
+      - '.github/workflows/scti5cu6b12-dual.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: boride-dual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  structural:
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chgnet, mace]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        shell: bash
+        run: |
+          if [ '${{ matrix.engine }}' = 'chgnet' ]; then
+            pip install -q chgnet pymatgen ase
+          else
+            pip install -q mace-torch pymatgen ase
+          fi
+      - name: Relax controls, products, and candidate at 0/400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python boride/dual_structural.py --engine '${{ matrix.engine }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/${{ matrix.engine }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boride-struct-${{ matrix.engine }}
+          path: artifacts/${{ matrix.engine }}
+          if-no-files-found: warn
+
+  select:
+    needs: structural
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      advance: ${{ steps.gate.outputs.advance }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: boride-struct-*
+          path: raw
+          merge-multiple: false
+      - name: Normalize dual-model artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts/chgnet artifacts/mace
+          cp -a raw/boride-struct-chgnet/. artifacts/chgnet/ || true
+          cp -a raw/boride-struct-mace/. artifacts/mace/ || true
+      - name: Cross-model selection
+        run: python boride/select.py
+      - name: Export gate
+        id: gate
+        shell: bash
+        run: |
+          echo "advance=$(cat artifacts/select/ADVANCE)" >> "$GITHUB_OUTPUT"
+          cat artifacts/select/selection.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boride-selection
+          path: artifacts/select
+
+  qe:
+    needs: select
+    if: needs.select.outputs.advance == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chgnet, mace]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: boride-selection
+          path: artifacts/select
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install QE 7.5 and parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O /tmp/s.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/s.tar.gz' | md5sum -c -
+          mkdir -p /tmp/pp /tmp/borideq
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: QE electronic structure at 0 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python boride/qe_relaxed.py --cif 'artifacts/select/${{ matrix.engine }}_relaxed_0.00000000GPa.cif' \
+            --engine '${{ matrix.engine }}' --pressure-atm 0 --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch '/tmp/borideq/${{ matrix.engine }}/0' --out 'artifacts/qe_${{ matrix.engine }}/0atm'
+      - name: Matched QE+U FM-AFM exchange calibration
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python boride/exchange_compare.py --cif 'artifacts/select/${{ matrix.engine }}_relaxed_0.00000000GPa.cif' \
+            --engine '${{ matrix.engine }}' --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch '/tmp/borideq/${{ matrix.engine }}/exchange' --out 'artifacts/qe_${{ matrix.engine }}/exchange_0atm'
+      - name: QE electronic structure at 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python boride/qe_relaxed.py --cif 'artifacts/select/${{ matrix.engine }}_relaxed_0.04053000GPa.cif' \
+            --engine '${{ matrix.engine }}' --pressure-atm 400 --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch '/tmp/borideq/${{ matrix.engine }}/400' --out 'artifacts/qe_${{ matrix.engine }}/400atm'
+      - name: Print results
+        if: always()
+        run: |
+          cat 'artifacts/qe_${{ matrix.engine }}/0atm/qe_electronic.csv' || true
+          cat 'artifacts/qe_${{ matrix.engine }}/exchange_0atm/exchange_result.json' || true
+          cat 'artifacts/qe_${{ matrix.engine }}/400atm/qe_electronic.csv' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boride-qe-${{ matrix.engine }}
+          path: artifacts/qe_${{ matrix.engine }}
+          if-no-files-found: warn
