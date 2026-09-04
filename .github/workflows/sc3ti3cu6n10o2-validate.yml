@@ -1,0 +1,38 @@
+name: Sc3Ti3Cu6N10O2 structural validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sc3ti3cu6n10o2/**'
+      - '.github/workflows/sc3ti3cu6n10o2-validate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: sc3ti3-struct-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relax:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CHGNet stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Run 0 and 400 atm relaxation
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python sc3ti3cu6n10o2/chgnet_validate.py
+      - name: Print
+        if: always()
+        run: cat artifacts/sc3ti3cu6n10o2/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sc3ti3-struct
+          path: artifacts/sc3ti3cu6n10o2
+          if-no-files-found: warn
