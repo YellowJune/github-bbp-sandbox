@@ -20,7 +20,7 @@ jobs:
       matrix:
         name: [Nb3W3Cu6C10N2, NbW5Cu6C12]
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 420
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,6 +66,14 @@ jobs:
           python highc/qe_relaxed.py --cif 'artifacts/${{ matrix.name }}/relaxed_0.00000000GPa.cif' \
             --pressure-atm 0 --name '${{ matrix.name }}' --ppdir /tmp/pp --meta /tmp/s.json \
             --scratch '/tmp/highcq/0' --out 'artifacts/${{ matrix.name }}/qe_0atm'
+      - name: Matched QE+U FM-AFM exchange calibration at 0 atm
+        if: steps.gate.outputs.advance == '1'
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python highc/exchange_compare.py --cif 'artifacts/${{ matrix.name }}/relaxed_0.00000000GPa.cif' \
+            --pressure-atm 0 --name '${{ matrix.name }}' --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch '/tmp/highcq/exchange0' --out 'artifacts/${{ matrix.name }}/exchange_0atm'
       - name: QE PBE/PBE+U at 400 atm
         if: steps.gate.outputs.advance == '1'
         env:
@@ -74,10 +82,11 @@ jobs:
           python highc/qe_relaxed.py --cif 'artifacts/${{ matrix.name }}/relaxed_0.04053000GPa.cif' \
             --pressure-atm 400 --name '${{ matrix.name }}' --ppdir /tmp/pp --meta /tmp/s.json \
             --scratch '/tmp/highcq/400' --out 'artifacts/${{ matrix.name }}/qe_400atm'
-      - name: Print QE
+      - name: Print electronic and exchange results
         if: always()
         run: |
           cat 'artifacts/${{ matrix.name }}/qe_0atm/qe_electronic.csv' || true
+          cat 'artifacts/${{ matrix.name }}/exchange_0atm/exchange_result.json' || true
           cat 'artifacts/${{ matrix.name }}/qe_400atm/qe_electronic.csv' || true
       - uses: actions/upload-artifact@v4
         if: always()
