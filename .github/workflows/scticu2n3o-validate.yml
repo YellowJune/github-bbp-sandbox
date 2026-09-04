@@ -1,0 +1,43 @@
+name: ScTiCu2N3O structural validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scticu2n3o/**'
+      - '.github/workflows/scticu2n3o-validate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: scti-struct-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relax:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        name: [CaCuO2, Cu3N, ScTiCu2N3O]
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural model
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python scticu2n3o/chgnet_validate.py --name '${{ matrix.name }}' --out 'artifacts/scti/${{ matrix.name }}'
+      - name: Print
+        if: always()
+        run: cat 'artifacts/scti/${{ matrix.name }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scti-${{ matrix.name }}
+          path: artifacts/scti/${{ matrix.name }}
+          if-no-files-found: warn
