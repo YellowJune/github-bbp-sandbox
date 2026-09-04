@@ -19,14 +19,18 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Quantum ESPRESSO and analysis stack
+      - name: Install Quantum ESPRESSO 7.5 and analysis stack
         run: |
           sudo apt-get update
-          sudo apt-get install -y quantum-espresso openmpi-bin wget
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          echo '/opt/espresso/7.5' >> "$GITHUB_PATH"
+          /opt/espresso/7.5/pw.x -h >/tmp/pw_help.txt 2>&1 || true
+          head -10 /tmp/pw_help.txt || true
           python -m pip install --upgrade pip
           pip install 'numpy<2.3' ase pandas
-          command -v pw.x
-          command -v projwfc.x
 
       - name: Download SSSP 1.2.1 PBE efficiency pseudopotentials
         run: |
@@ -47,7 +51,11 @@ jobs:
           ls -l /tmp/pps
 
       - name: Run same-pipeline Hg1201 parent and N/La interventions
+        env:
+          OMP_NUM_THREADS: '1'
         run: |
+          command -v pw.x
+          command -v projwfc.x
           python experiments/qe_oxynitride_scan.py \
             --pseudo-dir /tmp/pps \
             --sssp-json pseudo/SSSP_1.2.1_PBE_efficiency.json \
