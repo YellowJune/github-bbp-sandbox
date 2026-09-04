@@ -1,0 +1,48 @@
+name: Ba4Cu2Tl2N2O6 fixed-structure QE screen
+on:
+  pull_request:
+    paths:
+      - 'tl2n2/**'
+      - '.github/workflows/tl2n2-qe.yml'
+  workflow_dispatch:
+
+jobs:
+  qe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install QE 7.5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install 'numpy<2.3'
+      - name: Fetch SSSP
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O /tmp/s.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/s.tar.gz' | md5sum -c -
+          mkdir -p /tmp/pp /tmp/tl2n2
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: Run QE SCF and PDOS
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python tl2n2/qe_fixed.py \
+            --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch /tmp/tl2n2 \
+            --output artifacts/tl2n2
+      - if: always()
+        run: cat artifacts/tl2n2/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tl2n2-qe-fixed
+          path: artifacts/tl2n2
+          if-no-files-found: warn
