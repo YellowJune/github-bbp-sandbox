@@ -1,0 +1,29 @@
+name: Ca-site valence-skip structural validation
+on:
+  pull_request:
+    paths:
+      - 'ca_valenceskip/**'
+      - '.github/workflows/ca-valenceskip-validate.yml'
+  workflow_dispatch:
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [Parent, AgCaPair, InCaPair]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet chgnet ase pymatgen
+      - run: python ca_valenceskip/chgnet_validate.py --name ${{ matrix.name }} --out artifacts/${{ matrix.name }}
+      - if: always()
+        run: cat artifacts/${{ matrix.name }}/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ca-valenceskip-${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
