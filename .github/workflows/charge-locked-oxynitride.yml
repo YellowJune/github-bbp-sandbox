@@ -1,0 +1,33 @@
+name: Charge-locked Cu oxynitride structural falsification
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'charge_locked_oxynitride/**'
+      - '.github/workflows/charge-locked-oxynitride.yml'
+  workflow_dispatch:
+jobs:
+  relax:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        k: [4,5,6]
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet chgnet ase pymatgen
+      - name: Relax at 0 and 400 atm
+        run: python charge_locked_oxynitride/chgnet_validate.py --k '${{ matrix.k }}' --out 'artifacts/k${{ matrix.k }}'
+      - if: always()
+        run: cat 'artifacts/k${{ matrix.k }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: charge-locked-k${{ matrix.k }}
+          path: artifacts/k${{ matrix.k }}
+          if-no-files-found: warn
