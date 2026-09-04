@@ -1,0 +1,96 @@
+name: High-C carbonitride validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'highc/**'
+      - '.github/workflows/highc-carbonitride-validate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: highc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        name: [Nb3W3Cu6C10N2, NbW5Cu6C12]
+    runs-on: ubuntu-latest
+    timeout-minutes: 420
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CHGNet stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax candidate and exact decomposition products
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python highc/structural_decomp.py --name '${{ matrix.name }}'
+      - name: Read structural gate
+        id: gate
+        if: always()
+        shell: bash
+        run: |
+          A=0
+          if [ -f 'artifacts/${{ matrix.name }}/ADVANCE' ]; then A=$(cat 'artifacts/${{ matrix.name }}/ADVANCE'); fi
+          echo "advance=$A" >> "$GITHUB_OUTPUT"
+          cat 'artifacts/${{ matrix.name }}/result.json' || true
+      - name: Install QE 7.5
+        if: steps.gate.outputs.advance == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP
+        if: steps.gate.outputs.advance == '1'
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O /tmp/s.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/s.tar.gz' | md5sum -c -
+          mkdir -p /tmp/pp /tmp/highcq
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: QE PBE/PBE+U at 0 atm
+        if: steps.gate.outputs.advance == '1'
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python highc/qe_relaxed.py --cif 'artifacts/${{ matrix.name }}/relaxed_0.00000000GPa.cif' \
+            --pressure-atm 0 --name '${{ matrix.name }}' --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch '/tmp/highcq/0' --out 'artifacts/${{ matrix.name }}/qe_0atm'
+      - name: Matched QE+U FM-AFM exchange calibration at 0 atm
+        if: steps.gate.outputs.advance == '1'
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python highc/exchange_compare.py --cif 'artifacts/${{ matrix.name }}/relaxed_0.00000000GPa.cif' \
+            --pressure-atm 0 --name '${{ matrix.name }}' --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch '/tmp/highcq/exchange0' --out 'artifacts/${{ matrix.name }}/exchange_0atm'
+      - name: QE PBE/PBE+U at 400 atm
+        if: steps.gate.outputs.advance == '1'
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python highc/qe_relaxed.py --cif 'artifacts/${{ matrix.name }}/relaxed_0.04053000GPa.cif' \
+            --pressure-atm 400 --name '${{ matrix.name }}' --ppdir /tmp/pp --meta /tmp/s.json \
+            --scratch '/tmp/highcq/400' --out 'artifacts/${{ matrix.name }}/qe_400atm'
+      - name: Print electronic and exchange results
+        if: always()
+        run: |
+          cat 'artifacts/${{ matrix.name }}/qe_0atm/qe_electronic.csv' || true
+          cat 'artifacts/${{ matrix.name }}/exchange_0atm/exchange_result.json' || true
+          cat 'artifacts/${{ matrix.name }}/qe_400atm/qe_electronic.csv' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: highc-${{ matrix.name }}
+          path: artifacts/${{ matrix.name }}
+          if-no-files-found: warn
