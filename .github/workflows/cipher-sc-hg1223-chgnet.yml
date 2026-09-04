@@ -1,0 +1,41 @@
+name: CIPHER SC Hg1223 CHGNet structural matrix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'experiments/chgnet_hg1223_one.py'
+      - '.github/workflows/cipher-sc-hg1223-chgnet.yml'
+  workflow_dispatch:
+
+jobs:
+  relax:
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        v: [parent, LaN_apical, LaN_outer, LaN_center, BiN_apical, BiN_outer, BiN_center, TlN_apical, TlN_outer, TlN_center]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CHGNet stack
+        run: |
+          pip install 'numpy<2.3' pymatgen ase 'chgnet==0.3.8'
+      - name: Relax at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          python experiments/chgnet_hg1223_one.py --only '${{ matrix.v }}' --output 'artifacts/hg1223_chgnet/${{ matrix.v }}'
+      - name: Print
+        if: always()
+        run: cat 'artifacts/hg1223_chgnet/${{ matrix.v }}/relax.csv' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hg1223-chgnet-${{ matrix.v }}
+          path: artifacts/hg1223_chgnet/${{ matrix.v }}
+          if-no-files-found: warn
