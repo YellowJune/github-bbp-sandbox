@@ -1,0 +1,43 @@
+name: Cu carbonitride structural competition
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'carbonitride/**'
+      - '.github/workflows/carbonitride-structural.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: carbonitride-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relax:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [TiNb5Cu6C6N6, Nb6Cu6C7N5, Ti3Nb3Cu6C4N8]
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CHGNet stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax ${{ matrix.candidate }} at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python carbonitride/structural.py --name '${{ matrix.candidate }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/${{ matrix.candidate }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: carbonitride-${{ matrix.candidate }}
+          path: artifacts/${{ matrix.candidate }}
+          if-no-files-found: warn
