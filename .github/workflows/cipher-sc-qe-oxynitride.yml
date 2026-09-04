@@ -25,14 +25,15 @@ jobs:
           sudo apt-get install -y quantum-espresso openmpi-bin wget
           python -m pip install --upgrade pip
           pip install 'numpy<2.3' ase pandas
-          pw.x --version || true
-          projwfc.x --version || true
+          command -v pw.x
+          command -v projwfc.x
 
       - name: Download SSSP 1.2.1 PBE efficiency pseudopotentials
         run: |
           mkdir -p pseudo/SSSP_1.2.1_PBE_efficiency
-          wget -q 'https://archive.materialscloud.org/record/file?record_id=1729&filename=SSSP_1.2.1_PBE_efficiency.tar.gz' -O /tmp/sssp.tar.gz
-          wget -q 'https://archive.materialscloud.org/record/file?record_id=1729&filename=SSSP_1.2.1_PBE_efficiency.json' -O pseudo/SSSP_1.2.1_PBE_efficiency.json
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/sssp.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O pseudo/SSSP_1.2.1_PBE_efficiency.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/sssp.tar.gz' | md5sum -c -
           tar -xzf /tmp/sssp.tar.gz -C pseudo/SSSP_1.2.1_PBE_efficiency
           test -s pseudo/SSSP_1.2.1_PBE_efficiency.json
           ls pseudo/SSSP_1.2.1_PBE_efficiency | head
