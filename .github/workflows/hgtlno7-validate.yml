@@ -1,0 +1,31 @@
+name: Ba4Cu2HgTlNO7 low-pressure structural validation
+on:
+  pull_request:
+    paths:
+      - 'hgtlno7/**'
+      - '.github/workflows/hgtlno7-validate.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        name: [Ba4Cu2Hg2O8, Ba4Cu2HgTlNO7]
+        scale: ['0.98','1.00','1.02']
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install --quiet chgnet ase pymatgen
+      - run: python hgtlno7/chgnet_validate.py --name ${{ matrix.name }} --scale ${{ matrix.scale }} --out artifacts/${{ matrix.name }}_${{ matrix.scale }}
+      - if: always()
+        run: cat artifacts/${{ matrix.name }}_${{ matrix.scale }}/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hgtlno7-${{ matrix.name }}-${{ matrix.scale }}
+          path: artifacts/${{ matrix.name }}_${{ matrix.scale }}
