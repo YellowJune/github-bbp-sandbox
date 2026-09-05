@@ -1,0 +1,34 @@
+name: Dilute remote electron-doped Ag-F screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agbef_dilute/**'
+      - '.github/workflows/agbef-dilute-remote.yml'
+  workflow_dispatch:
+
+jobs:
+  structural:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax AlBe11Ag12F48 at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agbef_dilute/structural.py
+      - name: Print preregistered result
+        if: always()
+        run: cat artifacts/dilute/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agbef-dilute-AlBe11Ag12F48
+          path: artifacts/dilute
+          if-no-files-found: warn
