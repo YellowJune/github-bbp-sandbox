@@ -1,4 +1,4 @@
-name: Ambient hydride van-Hove search registered entrypoint
+name: Ambient hydride van-Hove search
 
 on:
   pull_request:
@@ -6,11 +6,10 @@ on:
     paths:
       - 'ambient_hydride_vhs/**'
       - '.github/workflows/ambient-hydride-vhs-search.yml'
-      - '.github/workflows/main.yml'
   workflow_dispatch:
 
 concurrency:
-  group: ambient-hydride-vhs-registered-${{ github.ref }}
+  group: ambient-hydride-vhs-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -18,7 +17,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        candidate: [MgAlFeH6, MgAlRuH6, MgAlOsH6, MgGaFeH6, MgGaRuH6, MgGaOsH6, MgInFeH6, MgInRuH6, MgInOsH6]
+        candidate:
+          - MgAlFeH6
+          - MgAlRuH6
+          - MgAlOsH6
+          - MgGaFeH6
+          - MgGaRuH6
+          - MgGaOsH6
+          - MgInFeH6
+          - MgInRuH6
+          - MgInOsH6
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -49,7 +57,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        candidate: [MgAlFeH6, MgAlRuH6, MgAlOsH6, MgGaFeH6, MgGaRuH6, MgGaOsH6, MgInFeH6, MgInRuH6, MgInOsH6]
+        candidate:
+          - MgAlFeH6
+          - MgAlRuH6
+          - MgAlOsH6
+          - MgGaFeH6
+          - MgGaRuH6
+          - MgGaOsH6
+          - MgInFeH6
+          - MgInRuH6
+          - MgInOsH6
         atm: [0, 400]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
