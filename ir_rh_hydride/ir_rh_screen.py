@@ -61,12 +61,19 @@ def relax(name,atm,out):
         hm=hmetrics(sf,tm); dm=dmin(sf); p=atm*ATM_TO_GPA
         fmax=float(np.linalg.norm(force,axis=1).max()); e=float(at.get_potential_energy()); v=float(at.get_volume())
         ent=e+p*v*GPA_TO_EV_A3
-        ok=bool(fmax<=.08 and dm>=.75 and hm['min_H_H_A']>=.90 and 1.25<=hm['TM_H_mean_A']<=2.20 and hm['TM_H_max_A']<=2.35 and abs(float(-np.mean(stress[:3]))-p)<=.8)
+        hydro=float(-np.mean(stress[:3])); pressure_mismatch=abs(hydro-p)
+        # At <=400 atm the target pressure is <=0.0405 GPa, far below the ~1 GPa
+        # residual/model uncertainty observed even for the published MgAlFeH6
+        # calibration. Therefore CHGNet hydrostatic stress is recorded only as a
+        # diagnostic and is NOT a structural kill gate. The gross gate is limited
+        # to force convergence and obviously nonphysical bond collapse; DFT is the
+        # next falsification stage.
+        ok=bool(fmax<=.08 and dm>=.75 and hm['min_H_H_A']>=.90 and 1.25<=hm['TM_H_mean_A']<=2.20 and hm['TM_H_max_A']<=2.35)
         cif=out/f'{name}_{atm}atm_xh{xh:.3f}.cif'; sf.to(filename=str(cif))
-        rows.append({'xh':xh,'gross_pass':ok,'fmax_eV_A':fmax,'stress_GPa':float(-np.mean(stress[:3])),'energy_eV_atom':e/len(sf),'enthalpy_proxy_eV_atom':ent/len(sf),'volume_A3':v,'dmin_A':dm,**hm,'cif':str(cif)})
+        rows.append({'xh':xh,'gross_pass':ok,'fmax_eV_A':fmax,'stress_GPa':hydro,'pressure_mismatch_GPa':pressure_mismatch,'stress_gate_used':False,'energy_eV_atom':e/len(sf),'enthalpy_proxy_eV_atom':ent/len(sf),'volume_A3':v,'dmin_A':dm,**hm,'cif':str(cif)})
     viable=[r for r in rows if r['gross_pass']]; sel=min(viable or rows,key=lambda r:r['enthalpy_proxy_eV_atom'])
     shutil.copy2(sel['cif'],out/'selected.cif')
-    result={'candidate':name,'pressure_atm':atm,'runs':rows,'selected':sel,'advance_struct':bool(sel['gross_pass']),'note':'CHGNet is a structural-survival proxy only.'}
+    result={'candidate':name,'pressure_atm':atm,'runs':rows,'selected':sel,'advance_struct':bool(sel['gross_pass']),'note':'CHGNet is a structural-survival proxy only; hydrostatic stress is diagnostic-only at <=400 atm because model residual exceeds target pressure scale.'}
     (out/'struct.json').write_text(json.dumps(result,indent=2)); return result
 
 
