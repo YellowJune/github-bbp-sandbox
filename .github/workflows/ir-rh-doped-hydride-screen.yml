@@ -1,0 +1,63 @@
+name: Ir Rh donor-doped ambient hydride screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ir_rh_hydride/**'
+      - '.github/workflows/ir-rh-doped-hydride-screen.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ir-rh-doped-hydride-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate:
+          - MgAlFeH6
+          - MgAlRhH6
+          - MgGaRhH6
+          - MgAlIrH6
+          - MgGaIrH6
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack and QE 7.5
+        run: |
+          pip install -q 'numpy<2.3' chgnet pymatgen ase
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          sudo apt-get install -y /tmp/qe75.deb
+      - name: Fetch SSSP PBE efficiency pseudopotentials
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/sssp.tar.gz
+          mkdir -p /tmp/pp
+          tar -xzf /tmp/sssp.tar.gz -C /tmp/pp
+      - name: Run 0 and 400 atm structural plus electronic falsification screen
+        run: >-
+          python ir_rh_hydride/ir_rh_screen.py
+          --candidate '${{ matrix.candidate }}'
+          --ppdir /tmp/pp
+          --out 'artifacts/ir_rh/${{ matrix.candidate }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/ir_rh/${{ matrix.candidate }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ir-rh-hydride-${{ matrix.candidate }}
+          path: artifacts/ir_rh/${{ matrix.candidate }}
+          if-no-files-found: warn
+          compression-level: 9
