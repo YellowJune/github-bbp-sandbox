@@ -1,0 +1,35 @@
+name: Ag-F self-clamped ABF3 intergrowth screen
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+concurrency:
+  group: agf-selfclamp-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      matrix:
+        pair: [LiMg, NaMg, KMg, RbMg, NaZn, KZn, NaCa, KCa]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q 'numpy<2.3' chgnet pymatgen ase
+      - name: Relax self-clamped intergrowth at 0 and 400 atm
+        run: python agf_selfclamp/selfclamp_screen.py --pair '${{ matrix.pair }}' --out 'artifacts/selfclamp/${{ matrix.pair }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/selfclamp/${{ matrix.pair }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agf-selfclamp-${{ matrix.pair }}
+          path: artifacts/selfclamp/${{ matrix.pair }}
+          if-no-files-found: warn
+          compression-level: 6
