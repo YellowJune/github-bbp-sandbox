@@ -88,9 +88,9 @@ jobs:
           wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/sssp.tar.gz
           mkdir -p /tmp/pp
           tar -xzf /tmp/sssp.tar.gz -C /tmp/pp
-      - name: Run SCF NSCF DOS and H-PDOS screen
+      - name: Run robust SCF NSCF DOS and H-PDOS screen
         run: >-
-          python ambient_hydride_vhs/hydride_vhs_screen.py qe
+          python ambient_hydride_vhs/qe_retry.py
           --candidate '${{ matrix.candidate }}'
           --cif 'artifacts/hydride/${{ matrix.candidate }}/struct/selected_${{ matrix.atm }}atm.cif'
           --atm '${{ matrix.atm }}'
