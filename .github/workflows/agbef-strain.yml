@@ -1,0 +1,42 @@
+name: Ag-F epitaxial-strain 300K geometry screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agbef_strain/**'
+      - '.github/workflows/agbef-strain.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: agbef-strain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strain:
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [Parent, Li, Al]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax biaxially constrained Ag-F candidate
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agbef_strain/scan.py --kind '${{ matrix.kind }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/strain/${{ matrix.kind }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agbef-strain-${{ matrix.kind }}
+          path: artifacts/strain/${{ matrix.kind }}
+          if-no-files-found: warn
