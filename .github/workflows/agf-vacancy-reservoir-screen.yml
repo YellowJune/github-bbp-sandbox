@@ -1,0 +1,42 @@
+name: Ag-F remote-vacancy carrier-reservoir screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agbef/vacancy_reservoir_screen.py'
+      - '.github/workflows/agf-vacancy-reservoir-screen.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: agf-vacancy-reservoir-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      matrix:
+        X: [Li, Na, K]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax charge-neutral remote-vacancy candidate
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agbef/vacancy_reservoir_screen.py --X '${{ matrix.X }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/vacancy_reservoir/${{ matrix.X }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agf-vacancy-reservoir-${{ matrix.X }}
+          path: artifacts/vacancy_reservoir/${{ matrix.X }}
+          if-no-files-found: warn

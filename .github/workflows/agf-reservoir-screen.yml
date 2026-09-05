@@ -1,0 +1,42 @@
+name: Ag-F charge-neutral carrier-reservoir screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agbef/reservoir_screen.py'
+      - '.github/workflows/agf-reservoir-screen.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: agf-reservoir-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      matrix:
+        X: [B, Al, Ga, Sc]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax charge-neutral reservoir candidate
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agbef/reservoir_screen.py --X '${{ matrix.X }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/reservoir/${{ matrix.X }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agf-reservoir-${{ matrix.X }}
+          path: artifacts/reservoir/${{ matrix.X }}
+          if-no-files-found: warn

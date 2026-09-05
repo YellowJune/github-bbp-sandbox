@@ -1,0 +1,147 @@
+name: Ag-Be-F layered de novo validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agbef/**'
+      - '.github/workflows/agbe-f-layered-validate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: agbef-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  structural:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    outputs:
+      advance_li: ${{ steps.gate.outputs.advance_li }}
+      advance_al: ${{ steps.gate.outputs.advance_al }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax LiBe5Ag6F24 and AlBe5Ag6F24 at 0/400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agbef/structural.py
+      - name: Read preregistered gates
+        id: gate
+        if: always()
+        shell: bash
+        run: |
+          L=0; A=0
+          [ -f artifacts/struct/ADVANCE_Li ] && L=$(cat artifacts/struct/ADVANCE_Li)
+          [ -f artifacts/struct/ADVANCE_Al ] && A=$(cat artifacts/struct/ADVANCE_Al)
+          echo "advance_li=$L" >> "$GITHUB_OUTPUT"
+          echo "advance_al=$A" >> "$GITHUB_OUTPUT"
+          cat artifacts/struct/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agbef-struct
+          path: artifacts/struct
+          if-no-files-found: warn
+
+  qe_li:
+    needs: structural
+    if: needs.structural.outputs.advance_li == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        pressure: [0, 400]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: agbef-struct
+          path: artifacts/struct
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install QE 7.5 and parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP PBE efficiency
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O /tmp/s.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/s.tar.gz' | md5sum -c -
+          mkdir -p /tmp/pp /tmp/agbefq
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: Map Ag-F exchange on relaxed Li candidate
+        shell: bash
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          if [ '${{ matrix.pressure }}' = '0' ]; then CIF='artifacts/struct/relaxed_Li_0.00000000GPa.cif'; else CIF='artifacts/struct/relaxed_Li_0.04053000GPa.cif'; fi
+          python agbef/qe_exchange.py --cif "$CIF" --kind Li --pressure-atm '${{ matrix.pressure }}' \
+            --ppdir /tmp/pp --meta /tmp/s.json --scratch '/tmp/agbefq/Li/${{ matrix.pressure }}' \
+            --out 'artifacts/qe/Li/${{ matrix.pressure }}atm'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agbef-qe-Li-${{ matrix.pressure }}atm
+          path: artifacts/qe/Li/${{ matrix.pressure }}atm
+          if-no-files-found: warn
+
+  qe_al:
+    needs: structural
+    if: needs.structural.outputs.advance_al == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        pressure: [0, 400]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: agbef-struct
+          path: artifacts/struct
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install QE 7.5 and parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP PBE efficiency
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O /tmp/s.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/s.tar.gz' | md5sum -c -
+          mkdir -p /tmp/pp /tmp/agbefq
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: Map Ag-F exchange on relaxed Al candidate
+        shell: bash
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          if [ '${{ matrix.pressure }}' = '0' ]; then CIF='artifacts/struct/relaxed_Al_0.00000000GPa.cif'; else CIF='artifacts/struct/relaxed_Al_0.04053000GPa.cif'; fi
+          python agbef/qe_exchange.py --cif "$CIF" --kind Al --pressure-atm '${{ matrix.pressure }}' \
+            --ppdir /tmp/pp --meta /tmp/s.json --scratch '/tmp/agbefq/Al/${{ matrix.pressure }}' \
+            --out 'artifacts/qe/Al/${{ matrix.pressure }}atm'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agbef-qe-Al-${{ matrix.pressure }}atm
+          path: artifacts/qe/Al/${{ matrix.pressure }}atm
+          if-no-files-found: warn
