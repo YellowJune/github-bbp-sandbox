@@ -1,0 +1,57 @@
+name: MOSAIC-RAG batched block repair CPU
+
+on:
+  push:
+    branches: [mosaic-rag-exp-20260905]
+    paths:
+      - '.github/workflows/mosaic-rag-block-cpu.yml'
+  workflow_dispatch:
+
+jobs:
+  block_cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mosaic-rag-exp-20260905
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch transformers accelerate datasets scipy scikit-learn sentencepiece
+      - name: Syntax check
+        run: python -m py_compile experiments/mosaic_rag_real.py experiments/mosaic_rag_block_repair.py
+      - name: Run batched boundary-block repair
+        run: |
+          python experiments/mosaic_rag_block_repair.py \
+            --model HuggingFaceTB/SmolLM2-135M-Instruct \
+            --examples 3 \
+            --offset 4 \
+            --docs 4 \
+            --max-chunk-tokens 24 \
+            --blocks 1,2,4,8,12,24 \
+            --output experiments/artifacts/mosaic_rag_block_smollm135_cpu.json
+      - name: Print compact result
+        if: always()
+        run: |
+          if [ -f experiments/artifacts/mosaic_rag_block_smollm135_cpu.json ]; then
+            python - <<'PY'
+          import json
+          d=json.load(open('experiments/artifacts/mosaic_rag_block_smollm135_cpu.json'))
+          print('FINAL_BLOCK_SUMMARY='+json.dumps({'metadata':d['metadata'],'aggregate':d['aggregate']},separators=(',',':')))
+          PY
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mosaic-rag-block-smollm135-cpu
+          path: experiments/artifacts/mosaic_rag_block_smollm135_cpu.json
+          if-no-files-found: warn
