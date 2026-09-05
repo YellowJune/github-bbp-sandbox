@@ -1,0 +1,38 @@
+name: Ag-F divalent spacer counterfactual screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agf_spacer_counterfactual/**'
+      - '.github/workflows/agf-spacer-counterfactual.yml'
+  workflow_dispatch:
+
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      matrix:
+        M: [Be, Mg, Ca, Sr, Zn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax M6Ag6F24 at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agf_spacer_counterfactual/screen.py --M '${{ matrix.M }}'
+      - name: Print result
+        if: always()
+        run: cat 'artifacts/spacer/${{ matrix.M }}/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agf-spacer-${{ matrix.M }}
+          path: artifacts/spacer/${{ matrix.M }}
+          if-no-files-found: warn
