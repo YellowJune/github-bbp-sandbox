@@ -11,7 +11,10 @@ from pathlib import Path
 import numpy as np
 from pymatgen.core import Structure
 
-from ambient_hydride_vhs import hydride_vhs_screen as base
+# This script is executed directly as `python ambient_hydride_vhs/qe_retry.py` in CI.
+# In that mode Python places this directory, not the repository root, on sys.path.
+# Import the sibling module directly so the retry path works both in CI and locally.
+import hydride_vhs_screen as base
 
 
 def run_input(exe: str, inp: Path, out: Path) -> int:
@@ -90,12 +93,7 @@ def qe(candidate: str, cif: str, atm: int, ppdir: str, pw: str, outdir: str) -> 
     nelec = last_float(r"number of electrons\s*=\s*([-0-9.Ee+]+)", scf_txt)
     scf_nbnd = last_int(r"number of Kohn-Sham states\s*=\s*([0-9]+)", scf_txt)
 
-    # The initial run showed systematic Davidson failures at the dense NSCF grid
-    # (c_bands: too many bands are not converged).  Use CG, trim unnecessary
-    # high empty states, and fall back to the SCF k mesh if needed.  This is a
-    # numerical-reliability retry, not a physics gate.
     min_occ = int(math.ceil((nelec or 0.0) / 2.0))
-    target_nbnd = max(min_occ + 8, min(scf_nbnd or (min_occ + 8), min_occ + 12))
     attempts = []
     nscf_rc = 99
     nscf_txt = ""
@@ -122,7 +120,8 @@ def qe(candidate: str, cif: str, atm: int, ppdir: str, pw: str, outdir: str) -> 
         nscf_rc = rc
         nscf_txt = txt
 
-    (out / "nscf.in").write_text((out / f"nscf_attempt{attempts[-1]['attempt']}.in").read_text())
+    if attempts:
+        (out / "nscf.in").write_text((out / f"nscf_attempt{attempts[-1]['attempt']}.in").read_text())
     (out / "nscf.out").write_text(nscf_txt)
     ef_n = last_float(r"the Fermi energy is\s+([-0-9.Ee+]+)\s+ev", nscf_txt)
     if ef_n is not None:
