@@ -1,0 +1,52 @@
+name: MOSAIC-RAG real GPU pilot
+
+on:
+  push:
+    branches: [mosaic-rag-exp-20260905]
+    paths:
+      - 'experiments/mosaic_rag_real.py'
+      - '.github/workflows/mosaic-rag-real.yml'
+  workflow_dispatch:
+
+jobs:
+  pilot:
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 60
+    env:
+      HF_HUB_DISABLE_TELEMETRY: '1'
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: mosaic-rag-exp-20260905
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify GPU
+        run: |
+          nvidia-smi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch transformers accelerate datasets scipy scikit-learn sentencepiece
+      - name: Static syntax check
+        run: |
+          python -m py_compile experiments/mosaic_rag_real.py
+      - name: Run Qwen2.5-0.5B HotpotQA pilot
+        run: |
+          python experiments/mosaic_rag_real.py \
+            --model Qwen/Qwen2.5-0.5B-Instruct \
+            --train-examples 4 \
+            --cal-examples 4 \
+            --test-examples 4 \
+            --trace-examples 500 \
+            --docs 4 \
+            --max-chunk-tokens 40 \
+            --generation-tokens 8 \
+            --seed 17 \
+            --output experiments/artifacts/mosaic_rag_real_qwen05.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mosaic-rag-real-qwen05
+          path: experiments/artifacts/mosaic_rag_real_qwen05.json
+          if-no-files-found: error
