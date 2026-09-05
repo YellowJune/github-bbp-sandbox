@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: ir-rh-doped-hydride-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   screen:
