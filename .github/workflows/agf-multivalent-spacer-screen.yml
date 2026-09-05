@@ -1,0 +1,38 @@
+name: Ag-F neutral multivalent spacer screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agf_multivalent_spacer/**'
+      - '.github/workflows/agf-multivalent-spacer-screen.yml'
+  workflow_dispatch:
+
+jobs:
+  screen:
+    strategy:
+      fail-fast: false
+      matrix:
+        M: [Al, Ga, Sc, Ti, Zr, Hf]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax neutral multivalent spacer candidate at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agf_multivalent_spacer/screen.py --M '${{ matrix.M }}'
+      - name: Print result
+        if: always()
+        run: cat artifacts/multivalent/${{ matrix.M }}/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agf-multivalent-${{ matrix.M }}
+          path: artifacts/multivalent/${{ matrix.M }}
+          if-no-files-found: warn
