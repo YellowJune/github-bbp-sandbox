@@ -1,34 +1,91 @@
-name: Advanced Security Impact Testing
+name: Ambient hydride van-Hove search registered entrypoint
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ambient_hydride_vhs/**'
+      - '.github/workflows/ambient-hydride-vhs-search.yml'
+      - '.github/workflows/main.yml'
   workflow_dispatch:
-    inputs:
-      malicious_input:
-        description: 'Input for exploitation'
-        required: false
-        default: 'safe'
+
+concurrency:
+  group: ambient-hydride-vhs-registered-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  exploit_job:
-    runs-on: ubuntu-latest
+  structural:
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [MgAlFeH6, MgAlRuH6, MgAlOsH6, MgGaFeH6, MgGaRuH6, MgGaOsH6, MgInFeH6, MgInRuH6, MgInOsH6]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
-      - name: Step 1 - Untrusted Input Execution
-        env:
-          MY_SECRET: ${{ secrets.TEST_SECRET }}
-        run: |
-          echo "Processing: ${{ github.event.inputs.malicious_input }}"
-          # Vulnerable eval
-          eval "echo ${{ github.event.inputs.malicious_input }}"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q 'numpy<2.3' chgnet pymatgen ase
+      - name: Relax candidate at 0 and 400 atm
+        run: >-
+          python ambient_hydride_vhs/hydride_vhs_screen.py relax
+          --candidate '${{ matrix.candidate }}'
+          --out 'artifacts/hydride/${{ matrix.candidate }}/struct'
+      - name: Print structural result
+        if: always()
+        run: cat 'artifacts/hydride/${{ matrix.candidate }}/struct/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hyd-vhs-struct-${{ matrix.candidate }}
+          path: artifacts/hydride/${{ matrix.candidate }}/struct
+          if-no-files-found: warn
+          compression-level: 6
 
-      - name: Step 2 - Environment Poisoning Test
+  electronic:
+    needs: structural
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [MgAlFeH6, MgAlRuH6, MgAlOsH6, MgGaFeH6, MgGaRuH6, MgGaOsH6, MgInFeH6, MgInRuH6, MgInOsH6]
+        atm: [0, 400]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: hyd-vhs-struct-${{ matrix.candidate }}
+          path: artifacts/hydride/${{ matrix.candidate }}/struct
+      - name: Install QE 7.5 and Python stack
         run: |
-          echo "This step uses variables set in Step 1"
-          echo "Current Path: $PATH"
-          echo "Target Secret: $TARGET_SECRET"
-
-      - name: Step 3 - Persistence Check
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP PBE efficiency pseudopotentials
         run: |
-          if [ -f "/tmp/pwned" ]; then
-            echo "Persistence achieved in runner!"
-            cat /tmp/pwned
-          fi
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/sssp.tar.gz
+          mkdir -p /tmp/pp
+          tar -xzf /tmp/sssp.tar.gz -C /tmp/pp
+      - name: Run SCF NSCF DOS and H-PDOS screen
+        run: >-
+          python ambient_hydride_vhs/hydride_vhs_screen.py qe
+          --candidate '${{ matrix.candidate }}'
+          --cif 'artifacts/hydride/${{ matrix.candidate }}/struct/selected_${{ matrix.atm }}atm.cif'
+          --atm '${{ matrix.atm }}'
+          --ppdir /tmp/pp
+          --out 'artifacts/hydride/${{ matrix.candidate }}/qe/${{ matrix.atm }}atm'
+      - name: Print electronic result
+        if: always()
+        run: cat 'artifacts/hydride/${{ matrix.candidate }}/qe/${{ matrix.atm }}atm/result.json' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hyd-vhs-qe-${{ matrix.candidate }}-${{ matrix.atm }}atm
+          path: artifacts/hydride/${{ matrix.candidate }}/qe/${{ matrix.atm }}atm
+          if-no-files-found: warn
+          compression-level: 6
