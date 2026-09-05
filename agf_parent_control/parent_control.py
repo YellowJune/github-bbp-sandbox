@@ -42,11 +42,30 @@ def relax(out):
 
 
 def pseudo(ppdir,elem):
-    fs=[]
-    for pat in [f'{elem}.*UPF',f'{elem}_*UPF',f'{elem}.*upf',f'{elem}_*upf']:
-        fs += glob.glob(os.path.join(ppdir,pat))
-    if not fs: raise RuntimeError('pseudo '+elem)
-    return os.path.basename(sorted(fs)[0])
+    # SSSP filenames are not guaranteed to preserve element-case prefixes
+    # (e.g. Be vs be). Search recursively and case-insensitively, accepting
+    # common separators after the element symbol.
+    el=elem.lower()
+    cand=[]
+    for p in Path(ppdir).rglob('*'):
+        if not p.is_file():
+            continue
+        b=p.name.lower()
+        if not b.endswith(('.upf','.upf.gz')):
+            continue
+        if b.startswith(el+'.') or b.startswith(el+'_') or b.startswith(el+'-'):
+            cand.append(p)
+    if not cand:
+        # Last-resort exact symbol prefix, still case-insensitive.
+        cand=[p for p in Path(ppdir).rglob('*') if p.is_file() and p.name.lower().startswith(el) and '.upf' in p.name.lower()]
+    if not cand:
+        raise RuntimeError('pseudo '+elem+'; available sample='+','.join(sorted(p.name for p in Path(ppdir).rglob('*') if p.is_file())[:20]))
+    p=sorted(cand,key=lambda x:(len(x.name),x.name.lower()))[0]
+    # QE receives pseudo_dir, so copy nested files to its root when needed.
+    root=Path(ppdir)/p.name
+    if p.resolve()!=root.resolve():
+        import shutil; shutil.copy2(p,root)
+    return p.name
 
 
 def aglabel(site):
