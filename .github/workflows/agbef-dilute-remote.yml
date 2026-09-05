@@ -1,0 +1,102 @@
+name: Dilute remote electron-doped Ag-F screen
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agbef_dilute/**'
+      - '.github/workflows/agbef-dilute-remote.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: agbef-dilute-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  structural:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      advance: ${{ steps.gate.outputs.advance }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install structural stack
+        run: pip install -q chgnet pymatgen ase
+      - name: Relax AlBe11Ag12F48 at 0 and 400 atm
+        env:
+          OMP_NUM_THREADS: '2'
+        run: python agbef_dilute/structural.py
+      - name: Read preregistered gate
+        id: gate
+        if: always()
+        shell: bash
+        run: |
+          A=0
+          [ -f artifacts/dilute/ADVANCE ] && A=$(cat artifacts/dilute/ADVANCE)
+          echo "advance=$A" >> "$GITHUB_OUTPUT"
+          cat artifacts/dilute/result.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agbef-dilute-AlBe11Ag12F48
+          path: artifacts/dilute
+          if-no-files-found: warn
+
+  qe_exchange:
+    needs: structural
+    if: needs.structural.outputs.advance == '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        pressure: [0, 400]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: agbef-dilute-AlBe11Ag12F48
+          path: artifacts/dilute
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install QE 7.5 and parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          echo 'b759b77935649a84985a2149329a4682f084a450a013b18cf2a12ff47dedf30c  /tmp/qe75.deb' | sha256sum -c -
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP PBE efficiency
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.json?download=1' -O /tmp/s.json
+          echo 'f8cc8b73c5736fca6a9a6cb14813db9b  /tmp/s.tar.gz' | md5sum -c -
+          mkdir -p /tmp/pp /tmp/diluteq
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: Coarse U6 FM-AF exchange mapping
+        shell: bash
+        env:
+          OMP_NUM_THREADS: '2'
+        run: |
+          KEY='0.00000000'
+          [ '${{ matrix.pressure }}' = '400' ] && KEY='0.04053000'
+          CIF=$(python - "$KEY" <<'PY'
+          import json,sys
+          r=json.load(open('artifacts/dilute/result.json'))
+          print(r['selected'][sys.argv[1]]['cif'])
+          PY
+          )
+          python agbef_dilute/qe_exchange.py --cif "$CIF" --pressure-atm '${{ matrix.pressure }}' \
+            --ppdir /tmp/pp --meta /tmp/s.json --scratch '/tmp/diluteq/${{ matrix.pressure }}' \
+            --out 'artifacts/dilute_qe/${{ matrix.pressure }}atm'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agbef-dilute-qe-${{ matrix.pressure }}atm
+          path: artifacts/dilute_qe/${{ matrix.pressure }}atm
+          if-no-files-found: warn
