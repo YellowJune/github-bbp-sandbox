@@ -1,0 +1,98 @@
+name: KMg self-clamped DFT rerank and exchange
+
+on:
+  pull_request:
+    paths:
+      - 'agf_selfclamp/kmg_qe.py'
+      - '.github/workflows/kmg-selfclamp-qe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        atm: [0, 400]
+        basin: [compact, expanded]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact KMg structural artifact from preregistered screen
+        uses: actions/download-artifact@v4
+        with:
+          name: agf-selfclamp-KMg
+          path: artifacts/kmg
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 33954987478
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install QE 7.5 and parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -q 'https://github.com/pranabdas/espresso/releases/download/qe-7.5-1/quantum-espresso_7.5-1_amd64.deb' -O /tmp/qe75.deb
+          sudo apt-get install -y /tmp/qe75.deb
+          pip install -q 'numpy<2.3' pymatgen
+      - name: Fetch SSSP PBE efficiency
+        run: |
+          wget -q 'https://archive.materialscloud.org/records/1dygy-1xb93/files/SSSP_1.2.1_PBE_efficiency.tar.gz?download=1' -O /tmp/s.tar.gz
+          mkdir -p /tmp/pp
+          tar -xzf /tmp/s.tar.gz -C /tmp/pp
+      - name: DFT+U FM/AF mapping
+        run: |
+          CIF="artifacts/kmg/KMg_ag_${{ matrix.basin }}_${{ matrix.atm }}atm.cif"
+          python agf_selfclamp/kmg_qe.py \
+            --cif "$CIF" --atm ${{ matrix.atm }} --basin ${{ matrix.basin }} \
+            --ppdir /tmp/pp --out "artifacts/qe/${{ matrix.atm }}_${{ matrix.basin }}"
+      - name: Upload compact result only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kmg-qe-${{ matrix.atm }}-${{ matrix.basin }}
+          path: |
+            artifacts/qe/${{ matrix.atm }}_${{ matrix.basin }}/result.json
+            artifacts/qe/${{ matrix.atm }}_${{ matrix.basin }}/*.in
+            artifacts/qe/${{ matrix.atm }}_${{ matrix.basin }}/*.out
+          if-no-files-found: warn
+          compression-level: 9
+
+  summarize:
+    needs: qe
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all QE result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kmg-qe-*
+          path: artifacts/all
+          merge-multiple: false
+      - name: Compare DFT AF enthalpies and J
+        run: |
+          python - <<'PY'
+          import glob,json,os
+          rows=[]
+          for f in glob.glob('artifacts/all/**/result.json',recursive=True):
+              d=json.load(open(f)); af=next((x for x in d if x.get('mode')=='AF_y'),None); j=next((x for x in d if x.get('mode')=='mapped_J'),None)
+              if af:
+                  rows.append({'atm':af['pressure_atm'],'basin':af['basin'],'H_AF_eV':af['enthalpy_eV'],'J_meV':None if not j else j['J_meV']})
+          for atm in [0,400]:
+              r=[x for x in rows if x['atm']==atm and x['H_AF_eV'] is not None]
+              if r:
+                  h0=min(x['H_AF_eV'] for x in r)
+                  for x in r: x['dH_meV_cell']=1000*(x['H_AF_eV']-h0)
+          out={'rows':rows}
+          os.makedirs('artifacts/summary',exist_ok=True)
+          json.dump(out,open('artifacts/summary/summary.json','w'),indent=2)
+          print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kmg-qe-summary
+          path: artifacts/summary/summary.json
