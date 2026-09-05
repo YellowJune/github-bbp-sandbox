@@ -13,7 +13,6 @@ from pymatgen.core import Structure
 
 # This script is executed directly as `python ambient_hydride_vhs/qe_retry.py` in CI.
 # In that mode Python places this directory, not the repository root, on sys.path.
-# Import the sibling module directly so the retry path works both in CI and locally.
 import hydride_vhs_screen as base
 
 
@@ -30,6 +29,26 @@ def last_float(pattern: str, text: str):
 def last_int(pattern: str, text: str):
     m = re.findall(pattern, text, re.I)
     return int(float(m[-1])) if m else None
+
+
+def disable_pw_symmetry(path: Path) -> None:
+    """Force identity-only PW symmetry for relaxed near-symmetric cells.
+
+    CHGNet-relaxed structures can be numerically close to a high-symmetry
+    position without satisfying it exactly. QE projwfc then may abort in
+    d_matrix while trying to symmetrize atomic projections.  Disabling PW
+    symmetry consistently in both SCF and NSCF avoids that representation
+    artifact and keeps all candidates/calibration on the same footing.
+    """
+    txt = path.read_text()
+    marker = "&SYSTEM\n"
+    if " nosym=.true.," not in txt:
+        txt = txt.replace(
+            marker,
+            marker + " nosym=.true.,\n noinv=.true.,\n",
+            1,
+        )
+    path.write_text(txt)
 
 
 def write_nscf(path: Path, s: Structure, ppdir: str, scratch: Path, prefix: str,
@@ -50,6 +69,8 @@ def write_nscf(path: Path, s: Structure, ppdir: str, scratch: Path, prefix: str,
         "/",
         "&SYSTEM",
         " ibrav=0,",
+        " nosym=.true.,",
+        " noinv=.true.,",
         f" nat={len(s)}, ntyp={len(species)},",
         " ecutwfc=50.0, ecutrho=400.0,",
         f" nbnd={nbnd},",
@@ -86,6 +107,7 @@ def qe(candidate: str, cif: str, atm: int, ppdir: str, pw: str, outdir: str) -> 
 
     scf_in, scf_out = out / "scf.in", out / "scf.out"
     base.write_pw(scf_in, s, ppdir, scratch, prefix, "scf")
+    disable_pw_symmetry(scf_in)
     scf_rc = run_input(pw, scf_in, scf_out)
     scf_txt = scf_out.read_text(errors="ignore")
     e_ry = last_float(r"!\s+total energy\s+=\s+([-0-9.Ee+]+)\s+Ry", scf_txt)
@@ -166,6 +188,7 @@ def qe(candidate: str, cif: str, atm: int, ppdir: str, pw: str, outdir: str) -> 
         "pressure_atm": atm,
         "natoms": len(s),
         "formula": s.composition.reduced_formula,
+        "symmetry_mode": "PW nosym=.true., noinv=.true.; projwfc default lsym",
         "scf_rc": scf_rc,
         "nscf_rc": nscf_rc,
         "nscf_attempts": attempts,
@@ -181,7 +204,7 @@ def qe(candidate: str, cif: str, atm: int, ppdir: str, pw: str, outdir: str) -> 
         "xu_dos_descriptor": descriptor,
         "metallic_screen": bool(total_ef is not None and total_ef >= 0.05),
         "n_H_pdos_files": len(hfiles),
-        "note": "Robust NSCF retry. DOS/H-DOS descriptor is ranking only; not EPC, lambda, phonon stability, or Tc evidence.",
+        "note": "Identity-only PW symmetry avoids near-symmetry projwfc d_matrix artifacts. DOS/H-DOS descriptor is ranking only; not EPC, lambda, phonon stability, or Tc evidence.",
     }
     (out / "result.json").write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
